@@ -1,0 +1,128 @@
+# LM Prompting
+
+```elixir
+Mix.install([
+  {:kino, "~> 0.9.1"},
+  {:poison, "~> 4.0"},
+  {:httpoison, "~> 1.8"},
+  {:explorer, "~> 0.5.0"}
+])
+```
+
+## Section
+
+```elixir
+defmodule OpenAI do
+  require HTTPoison
+
+  def load_openai_key(path \\ "~/.keys/openai_key.txt") do
+    {:ok, key} = File.read(Path.expand(path))
+    String.trim(key)
+  end
+
+  def get_completion_body(openai_key, prompt) do
+    headers = [
+      {"Content-Type", "application/json"},
+      {"Authorization", "Bearer #{openai_key}"}
+    ]
+
+    body =
+      Poison.encode!(%{
+        "model" => "text-davinci-003",
+        "prompt" => prompt,
+        "temperature" => 0.9,
+        "max_tokens" => 150,
+        "top_p" => 1,
+        "frequency_penalty" => 0.0,
+        "presence_penalty" => 0.6,
+        "stop" => [" Human:", " AI:"]
+      })
+
+    options = [:recv_timeout, 15000]
+    {:ok, response} = _post_to_openai(body, headers, options)
+    Poison.decode!(response.body)
+  end
+
+  def _post_to_openai(body, headers, options) do
+    case HTTPoison.post("https://api.openai.com/v1/completions", body, headers, options) do
+      {:ok, response} -> {:ok, response}
+      {:error, _} -> _post_to_openai(body, headers, options)
+    end
+  end
+
+  def get_completion(openai_key, prompt) do
+    body = get_completion_body(openai_key, prompt)
+    [record | _] = body["choices"]
+    record["text"]
+  end
+end
+```
+
+```elixir
+generate = fn prompt -> OpenAI.get_completion(OpenAI.load_openai_key(), prompt) end
+```
+
+```elixir
+response = generate.("a cat walks into a bar")
+```
+
+## UI
+
+## Chat
+
+
+
+```elixir
+inputs = [
+  prompt: Kino.Input.text("Prompt")
+]
+
+chat_form = Kino.Control.form(inputs, submit: "Send", reset_on_submit: [:prompt])
+```
+
+```elixir
+frame = Kino.Frame.new()
+```
+
+## Table results
+
+```elixir
+table_frame = Kino.Frame.new()
+```
+
+## Exportable results in JSON
+
+```elixir
+json_frame = Kino.Frame.new()
+```
+
+```elixir
+defmodule KinoUtils do
+  def prepare_outputs(prompt, response) do
+    raw_record = %{"prompt" => prompt, "response" => response}
+    record = Kino.Text.new(Poison.encode!(raw_record))
+    table = Kino.DataTable.new([raw_record])
+    [record, table]
+  end
+
+  def display_tables(prompt, response, table_frame, json_frame) do
+    [record, table] = prepare_outputs(prompt, response)
+    Kino.Frame.append(table_frame, table)
+    Kino.Frame.append(json_frame, record)
+  end
+end
+
+Kino.listen(chat_form, fn %{data: %{prompt: prompt}, origin: origin} ->
+  if prompt != "" do
+    prompt_md = Kino.Markdown.new("**prompt**: #{prompt}. Generating...")
+    Kino.Frame.append(frame, prompt_md)
+    response = generate.(prompt)
+    content_md = Kino.Markdown.new("**response**: #{response}")
+    Kino.Frame.append(frame, content_md)
+    KinoUtils.display_tables(prompt, response, table_frame, json_frame)
+  else
+    content = Kino.Markdown.new("_ERROR! You need a name and message to submit..._")
+    Kino.Frame.append(frame, content, to: origin)
+  end
+end)
+```
