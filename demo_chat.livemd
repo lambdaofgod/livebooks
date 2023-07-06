@@ -1,3 +1,5 @@
+<!-- livebook:{"app_settings":{"access_type":"public","slug":"app"}} -->
+
 # LM Prompting
 
 ```elixir
@@ -13,23 +15,35 @@ Mix.install([
 ## Section
 
 ```elixir
-defmodule OpenAI do
+defmodule OpenAIClient do
   require HTTPoison
 
-  def load_openai_key(path \\ "openai_key.txt") do
+  defstruct [:openai_key, :model]
+
+  def new(openai_key \\ nil, openai_key_path \\ nil) do
+    key =
+      case openai_key do
+        nil -> load_openai_key(openai_key_path)
+        _ -> openai_key
+      end
+
+    %OpenAIClient{:openai_key => key}
+  end
+
+  def load_openai_key(path \\ "openai_medsi_key.txt") do
     {:ok, key} = File.read(Path.expand(path))
     String.trim(key)
   end
 
-  def get_completion_body(openai_key, prompt) do
+  def get_completion_body(client, prompt, model) do
     headers = [
       {"Content-Type", "application/json"},
-      {"Authorization", "Bearer #{openai_key}"}
+      {"Authorization", "Bearer #{client.openai_key}"}
     ]
 
     body =
       Poison.encode!(%{
-        "model" => "text-davinci-003",
+        "model" => model,
         "prompt" => prompt,
         "temperature" => 0.9,
         "max_tokens" => 150,
@@ -51,8 +65,8 @@ defmodule OpenAI do
     end
   end
 
-  def get_completion(openai_key, prompt) do
-    body = get_completion_body(openai_key, prompt)
+  def get_completion(client, prompt, model \\ "text-davinci-003") do
+    body = get_completion_body(client, prompt, model)
     [record | _] = body["choices"]
     record["text"]
   end
@@ -60,20 +74,31 @@ end
 ```
 
 ```elixir
-generate = fn prompt -> OpenAI.get_completion(OpenAI.load_openai_key(), prompt) end
+defmodule Generator do
+  def openai_client do
+    OpenAIClient.new(nil, "openai_key.txt")
+  end
+
+  def generate(prompt, model \\ "text-davinci-003") do
+    openai_client() |> OpenAIClient.get_completion(prompt, model)
+  end
+end
 ```
 
 ```elixir
-response = generate.("a cat walks into a bar")
+response = Generator.generate("a cat walks into a bar")
 ```
 
-## UI
-
-## Chat
+```elixir
+Kino.Markdown.new("### Chat\n----------")
+```
 
 ```elixir
+models = ["text-davinci-003", "gpt-3.5-turbo-0613", "gpt-4-0613"]
+
 inputs = [
-  prompt: Kino.Input.text("Prompt")
+  prompt: Kino.Input.text("Prompt"),
+  model: Kino.Input.select("model", for(m <- models, do: {m, m}))
 ]
 
 chat_form = Kino.Control.form(inputs, submit: "Send", reset_on_submit: [:prompt])
@@ -83,13 +108,17 @@ chat_form = Kino.Control.form(inputs, submit: "Send", reset_on_submit: [:prompt]
 frame = Kino.Frame.new()
 ```
 
-## Viewable table results
+```elixir
+Kino.Markdown.new("### Viewable table results\n------------")
+```
 
 ```elixir
 json_frame = Kino.Frame.new()
 ```
 
-## Exportable results in JSONLines
+```elixir
+Kino.Markdown.new("### Exportable results in JSONLines\n----------")
+```
 
 ```elixir
 table_frame = Kino.Frame.new()
@@ -99,9 +128,9 @@ table_frame = Kino.Frame.new()
 defmodule KinoUtils do
   def prettyprint(record) do
     ~s"""
-    ### prompt:
+    #### prompt:
     #{record["prompt"]},
-    ### response:
+    #### response:
     #{record["response"]}
     """
     |> String.trim()
@@ -118,11 +147,11 @@ defmodule KinoUtils do
   end
 end
 
-Kino.listen(chat_form, fn %{data: %{prompt: prompt}, origin: origin} ->
+Kino.listen(chat_form, fn %{data: %{prompt: prompt, model: model}, origin: origin} ->
   if prompt != "" do
     prompt_md = Kino.Markdown.new("**user**: #{prompt}. Generating...")
     Kino.Frame.append(frame, prompt_md)
-    response = generate.(prompt)
+    response = Generator.generate(prompt, model)
     content_md = Kino.Markdown.new("**bot**: #{response}")
     Kino.Frame.append(frame, content_md)
     KinoUtils.display_tables(prompt, response, table_frame, json_frame)
