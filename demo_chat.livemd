@@ -35,40 +35,83 @@ defmodule OpenAIClient do
     String.trim(key)
   end
 
-  def get_completion_body(client, prompt, model) do
+  defp get_completion_body(model, prompt) do
+    Poison.encode!(%{
+      "model" => model,
+      "prompt" => prompt,
+      "temperature" => 0.9,
+      "max_tokens" => 150,
+      "top_p" => 1,
+      "frequency_penalty" => 0.0,
+      "presence_penalty" => 0.6,
+      "stop" => [" Human:", " AI:"]
+    })
+  end
+
+  defp get_chat_body(model, prompt) do
+    Poison.encode!(%{
+      "model" => model,
+      "messages" => [%{"role" => "user", "content" => prompt}],
+      "temperature" => 0.9,
+      "max_tokens" => 15
+    })
+  end
+
+  defp is_completion_model_name(model) do
+    model |> String.contains?("text-davinci")
+  end
+
+  defp get_openai_params(model, prompt) do
+    if is_completion_model_name(model) do
+      {"https://api.openai.com/v1/completions", get_completion_body(model, prompt)}
+    else
+      {"https://api.openai.com/v1/chat/completions", get_chat_body(model, prompt)}
+    end
+  end
+
+  defp _get_response(client, prompt, model) do
     headers = [
       {"Content-Type", "application/json"},
       {"Authorization", "Bearer #{client.openai_key}"}
     ]
 
-    body =
-      Poison.encode!(%{
-        "model" => model,
-        "prompt" => prompt,
-        "temperature" => 0.9,
-        "max_tokens" => 150,
-        "top_p" => 1,
-        "frequency_penalty" => 0.0,
-        "presence_penalty" => 0.6,
-        "stop" => [" Human:", " AI:"]
-      })
-
-    options = [:recv_timeout, 15000]
-    {:ok, response} = _post_to_openai(body, headers, options)
-    Poison.decode!(response.body)
+    {url, request_body} = get_openai_params(model, prompt)
+    options = [recv_timeout: 10000, timeout: 10000]
+    HTTPoison.post(url, request_body, headers, options)
   end
 
-  def _post_to_openai(body, headers, options) do
-    case HTTPoison.post("https://api.openai.com/v1/completions", body, headers, options) do
-      {:ok, response} -> {:ok, response}
-      {:error, _} -> _post_to_openai(body, headers, options)
+  defp get_response(%{"choices" => choices}) do
+    [result | _] = choices
+    {:ok, get_response_text(result)}
+  end
+
+  defp get_response(%{"error" => error}) do
+    {:error, error["message"]}
+  end
+
+  defp get_response_text(%{"message" => message}) do
+    message["content"]
+  end
+
+  defp get_response_text(%{"text" => text}) do
+    text
+  end
+
+  def get_completion_response(client, prompt, model) do
+    maybe_api_response = _get_response(client, prompt, model)
+
+    case maybe_api_response do
+      {:ok, %_{body: body}} ->
+        body = Poison.decode!(body)
+        response = get_response(body)
+        response
+
+      {status, %_{reason: reason}} ->
+        {status, Atom.to_string(reason)}
+
+      _ ->
+        maybe_api_response
     end
-  end
-
-  def get_completion(client, prompt, model \\ "text-davinci-003") do
-    body = get_completion_body(client, prompt, model)
-    [record | _] = body["choices"]
-    record["text"]
   end
 end
 ```
@@ -79,8 +122,14 @@ defmodule Generator do
     OpenAIClient.new(nil, "openai_key.txt")
   end
 
-  def generate(prompt, model \\ "text-davinci-003") do
-    openai_client() |> OpenAIClient.get_completion(prompt, model)
+  def generate(prompt, model \\ "gpt-3.5-turbo-0613") do
+    maybe_result = openai_client() |> OpenAIClient.get_completion_response(prompt, model)
+
+    case maybe_result do
+      {:error, result} -> "Error: " <> result
+      {:ok, result} -> result
+      _ -> "OpenAI Error"
+    end
   end
 end
 ```
