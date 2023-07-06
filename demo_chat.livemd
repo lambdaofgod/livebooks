@@ -5,7 +5,8 @@ Mix.install([
   {:kino, "~> 0.9.1"},
   {:poison, "~> 4.0"},
   {:httpoison, "~> 1.8"},
-  {:explorer, "~> 0.5.0"}
+  {:explorer, "~> 0.5.0"},
+  {:kino_explorer, "~> 0.1.7"}
 ])
 ```
 
@@ -15,7 +16,7 @@ Mix.install([
 defmodule OpenAI do
   require HTTPoison
 
-  def load_openai_key(path \\ "~/.keys/openai_key.txt") do
+  def load_openai_key(path \\ "openai_key.txt") do
     {:ok, key} = File.read(Path.expand(path))
     String.trim(key)
   end
@@ -70,8 +71,6 @@ response = generate.("a cat walks into a bar")
 
 ## Chat
 
-
-
 ```elixir
 inputs = [
   prompt: Kino.Input.text("Prompt")
@@ -84,40 +83,47 @@ chat_form = Kino.Control.form(inputs, submit: "Send", reset_on_submit: [:prompt]
 frame = Kino.Frame.new()
 ```
 
-## Table results
-
-```elixir
-table_frame = Kino.Frame.new()
-```
-
-## Exportable results in JSON
+## Viewable table results
 
 ```elixir
 json_frame = Kino.Frame.new()
 ```
 
+## Exportable results in JSONLines
+
+```elixir
+table_frame = Kino.Frame.new()
+```
+
 ```elixir
 defmodule KinoUtils do
+  def prettyprint(record) do
+    ~s"""
+    ### prompt:
+    #{record["prompt"]},
+    ### response:
+    #{record["response"]}
+    """
+    |> String.trim()
+  end
+
   def prepare_outputs(prompt, response) do
-    raw_record = %{"prompt" => prompt, "response" => response}
-    record = Kino.Text.new(Poison.encode!(raw_record))
-    table = Kino.DataTable.new([raw_record])
-    [record, table]
+    %{"prompt" => prompt, "response" => response}
   end
 
   def display_tables(prompt, response, table_frame, json_frame) do
-    [record, table] = prepare_outputs(prompt, response)
-    Kino.Frame.append(table_frame, table)
-    Kino.Frame.append(json_frame, record)
+    record = prepare_outputs(prompt, response)
+    Kino.Frame.append(table_frame, Kino.Text.new(Poison.encode!(record)))
+    Kino.Frame.append(json_frame, Kino.Markdown.new(prettyprint(record)))
   end
 end
 
 Kino.listen(chat_form, fn %{data: %{prompt: prompt}, origin: origin} ->
   if prompt != "" do
-    prompt_md = Kino.Markdown.new("**prompt**: #{prompt}. Generating...")
+    prompt_md = Kino.Markdown.new("**user**: #{prompt}. Generating...")
     Kino.Frame.append(frame, prompt_md)
     response = generate.(prompt)
-    content_md = Kino.Markdown.new("**response**: #{response}")
+    content_md = Kino.Markdown.new("**bot**: #{response}")
     Kino.Frame.append(frame, content_md)
     KinoUtils.display_tables(prompt, response, table_frame, json_frame)
   else
