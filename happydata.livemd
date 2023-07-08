@@ -1,0 +1,154 @@
+# Kaggle happiness dataset
+
+```elixir
+Mix.install([
+  {:explorer, "~> 0.6.0"},
+  {:kino, "~> 0.9.0"},
+  {:vega_lite, "~> 0.1.6"},
+  {:kino_vega_lite, "~> 0.1.9"},
+  {:kino_explorer, "~> 0.1.4"}
+])
+```
+
+## Section
+
+```elixir
+alias VegaLite, as: Vl
+alias Explorer.DataFrame, as: DF
+alias Explorer.Series, as: Series
+
+# {:kino_explorer, "~> 0.1.8"},
+```
+
+Load dataframe (almost like in Pandas but load_csv! accepts string contents instead of file path)
+
+```elixir
+happy_df = DF.load_csv!(File.read!("happydata.csv"))
+```
+
+Show basic dataframe information
+
+```elixir
+DF.describe(happy_df)
+```
+
+<!-- livebook:{"attrs":{"chart_title":"happy","height":null,"layers":[{"active":true,"chart_type":"point","color_field":null,"color_field_aggregate":null,"color_field_bin":null,"color_field_scale_scheme":null,"color_field_type":null,"data_variable":"happy_df","geodata_color":"blue","latitude_field":null,"longitude_field":null,"x_field":"housecost","x_field_aggregate":null,"x_field_bin":null,"x_field_scale_type":null,"x_field_type":"quantitative","y_field":"happy","y_field_aggregate":null,"y_field_bin":null,"y_field_scale_type":null,"y_field_type":"quantitative"}],"vl_alias":"Elixir.Vl","width":null},"chunks":null,"kind":"Elixir.KinoVegaLite.ChartCell","livebook_object":"smart_cell"} -->
+
+```elixir
+Vl.new(title: "happy")
+|> Vl.data_from_values(happy_df, only: ["housecost", "happy"])
+|> Vl.mark(:point)
+|> Vl.encode_field(:x, "housecost", type: :quantitative)
+|> Vl.encode_field(:y, "happy", type: :quantitative)
+```
+
+<!-- livebook:{"attrs":{"assign_to":null,"collect":false,"data_frame":"happy_df","data_frame_alias":"Elixir.DF","is_data_frame":true,"lazy":true,"missing_require":"Elixir.Explorer.DataFrame","operations":[{"active":true,"columns":[],"data_options":{"happy":"integer","housecost":"integer","infoavail":"integer","policetrust":"integer","schoolquality":"integer","streetquality":"integer","ëvents":"integer"},"operation_type":"summarise","query":"max"},{"active":true,"columns":[],"data_options":{"happy":"integer","housecost":"integer","infoavail":"integer","policetrust":"integer","schoolquality":"integer","streetquality":"integer","ëvents":"integer"},"operation_type":"summarise","query":"min"}]},"chunks":null,"kind":"Elixir.KinoExplorer.DataTransformCell","livebook_object":"smart_cell"} -->
+
+```elixir
+require Explorer.DataFrame
+happy_df
+```
+
+`defp` means a function is private; in this case it can be skipped on first reading
+
+```elixir
+defmodule Plot do
+  def plot(df, col1, col2, plot_type) do
+    case plot_type do
+      :scatterplot -> scatterplot(df, col1, col2)
+      :boxplot -> boxplot(df, col1, col2)
+    end
+  end
+
+  defp get_range(srs) do
+    [srs |> Series.max(), srs |> Series.min()]
+  end
+
+  defp scatterplot(df, col1, col2) do
+    x_type = :quantitative
+    range1 = get_range(df[col1])
+    range2 = get_range(df[col2])
+
+    Vl.new(
+      title: [
+        text: "Scatterplot of Generated Data",
+        offset: 20
+      ],
+      width: 630,
+      height: 630
+    )
+    |> Vl.data_from_values(df)
+    |> Vl.mark(:circle)
+    |> Vl.encode_field(:x, col1,
+      type: x_type,
+      scale: [domain: range1],
+      axis: [grid: false]
+    )
+    |> Vl.encode_field(:y, col2,
+      type: :quantitative,
+      scale: [domain: range2],
+      axis: [grid: false]
+    )
+  end
+
+  defp boxplot(df, col1, col2) do
+    x_type = :ordinal
+    range1 = get_range(df[col1])
+    range2 = get_range(df[col2])
+
+    Vl.new(
+      title: [
+        text: "Boxplot of Generated Data",
+        offset: 20
+      ],
+      width: 630,
+      height: 630
+    )
+    |> Vl.data_from_values(df)
+    |> Vl.mark(:boxplot)
+    |> Vl.encode_field(:x, col1,
+      type: x_type,
+      scale: [domain: range1],
+      axis: [grid: false]
+    )
+    |> Vl.encode_field(:y, col2,
+      type: :quantitative,
+      scale: [domain: range2],
+      axis: [grid: false]
+    )
+  end
+end
+```
+
+```elixir
+defmodule PlotHappy do
+  defp columns_as_tuples(df) do
+    for n <- df.names, do: {n, n}
+  end
+
+  def plot_inputs(df) do
+    column_tuples = columns_as_tuples(df)
+    col1 = Kino.Input.select("col1", column_tuples) |> Kino.render()
+    col2 = Kino.Input.select("col2", column_tuples) |> Kino.render()
+    [col1, col2]
+  end
+
+  def plot(df, [col1, col2]) do
+    plot_type =
+      case Series.dtype(df[Kino.Input.read(col1)]) do
+        :integer -> :boxplot
+        _ -> :scatterplot
+      end
+
+    Plot.plot(df, Kino.Input.read(col1), Kino.Input.read(col2), plot_type)
+  end
+end
+```
+
+```elixir
+plot_inputs = PlotHappy.plot_inputs(happy_df)
+```
+
+```elixir
+PlotHappy.plot(happy_df, plot_inputs)
+```
