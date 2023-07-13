@@ -1,0 +1,127 @@
+# LMS
+
+```elixir
+Mix.install([
+  {:kino, "~> 0.9.1"},
+  {:poison, "~> 4.0"},
+  {:httpoison, "~> 1.8"}
+])
+```
+
+## Section
+
+```elixir
+defmodule NestedUpdater do
+  @doc ~S"""
+  updates nested dict
+
+  ## Examples
+
+      iex> NestedUpdater.update(%{:a => %{:b => 1, :c => 2}}, %{:a => %{:b => 2}})
+      %{:a => %{:b => 2, :c => 2}}
+  """
+  def update(old_map, new_map) do
+    Enum.reduce(new_map, old_map, fn {new_key, new_val}, acc ->
+      if Map.has_key?(acc, new_key) and is_map(new_val) do
+        Map.update!(acc, new_key, &update(&1, new_val))
+      else
+        Map.put(acc, new_key, new_val)
+      end
+    end)
+  end
+end
+```
+
+```elixir
+defmodule LMClient do
+  require HTTPoison
+
+  defstruct [:model, :url]
+
+  def get_completion_response(client, payload, :completion) do
+    client |> get_response(payload, true) |> get_response_text
+  end
+
+  def get_completion_response(client, payload, :rellm) do
+    client |> get_response(payload, false) |> get_response_text
+  end
+
+  def example_payload do
+    %{
+      "prompt" => "User: give at least three examples of fruits\n Assistant: ",
+      "min_length" => 3,
+      "max_new_tokens" => 20,
+      "n" => 1,
+      "max_length" => 512,
+      "stop" => "string",
+      "stream" => false,
+      "sampling_parameters" => %{
+        "temperature" => 1,
+        "top_k" => 100,
+        "top_p" => 0.9,
+        "logit_bias" => %{},
+        "presence_penalty" => 0,
+        "frequency_penalty" => 0,
+        "repetition_penalty" => 1,
+        "typical_p" => 1
+      },
+      "stop_after_match" => true,
+      "do_sample" => true,
+      "return_full_text" => false
+    }
+  end
+
+  def rellm_payload do
+    NestedUpdater.update(example_payload, %{"pattern" => "(.* ){5}"})
+  end
+
+  defp get_payload(use_rellm) do
+    cond do
+      use_rellm -> example_payload()
+      true -> rellm_payload()
+    end
+  end
+
+  defp get_request_body(model, payload, use_rellm) do
+    NestedUpdater.update(get_payload(use_rellm), payload) |> Poison.encode!()
+  end
+
+  defp get_response(client, payload, use_rellm) do
+    request_body = get_request_body(client.model, payload, use_rellm)
+    options = [recv_timeout: 10000, timeout: 10000]
+    endpoint = get_endpoint(use_rellm)
+
+    HTTPoison.post(
+      "#{client.url}/#{endpoint}",
+      request_body,
+      [{"Content-type", "application/json"}],
+      options
+    )
+  end
+
+  defp get_endpoint(true), do: "generate"
+  defp get_endpoint(false), do: "rellm_generate"
+
+  defp get_response_text({:ok, response}) do
+    body = Poison.decode!(response.body)
+    [result | _] = body["texts"]
+    {:ok, result}
+  end
+
+  defp get_response_text(other) do
+    other
+  end
+end
+```
+
+```elixir
+client = %LMClient{model: "falcon40b-instruct", url: "http://172.17.38.42:8765"}
+```
+
+```elixir
+LMClient.get_completion_response(client, %{"prompt" => "A cat walks into a bar"}, :completion)
+```
+
+```elixir
+HTTPoison.get("#{client.url}/info")
+```
