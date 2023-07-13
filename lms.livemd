@@ -123,5 +123,61 @@ LMClient.get_completion_response(client, %{"prompt" => "A cat walks into a bar"}
 ```
 
 ```elixir
-HTTPoison.get("#{client.url}/info")
+defmodule PromptHistoryInterface do
+  def new(client) do
+    {inputs, chat_form, frame} = make_widgets()
+    chat_form |> Kino.render()
+    frame |> Kino.render()
+    client |> wire_widgets({chat_form, frame})
+  end
+
+  def make_widgets() do
+    inputs = [
+      prompt: Kino.Input.text("Prompt"),
+      pattern: Kino.Input.text("rellm pattern")
+    ]
+
+    frame = Kino.Frame.new()
+    chat_form = Kino.Control.form(inputs, submit: "Send", reset_on_submit: [:prompt, :pattern])
+    {inputs, chat_form, frame}
+  end
+
+  def wire_widgets(client, {chat_form, frame}) do
+    Kino.listen(chat_form, fn %{data: %{prompt: prompt, pattern: pattern}, origin: origin} ->
+      if prompt != "" do
+        add_markdown_to_frame(frame, "**user**: #{prompt}")
+
+        cond do
+          pattern != "" -> add_markdown_to_frame(frame, "***pattern***: #{pattern}")
+          true -> nil
+        end
+
+        add_markdown_to_frame(frame, "generating...")
+        {payload, call_type} = make_client_args(prompt, pattern)
+        {:ok, generated_text} = LMClient.get_completion_response(client, payload, call_type)
+        add_markdown_to_frame(frame, "**bot**: #{generated_text}")
+      else
+        content = Kino.Markdown.new("_ERROR! You need a name and message to submit..._")
+        Kino.Frame.append(frame, content, to: origin)
+      end
+    end)
+  end
+
+  def add_markdown_to_frame(frame, markdown_str) do
+    Kino.Frame.append(frame, Kino.Markdown.new(markdown_str))
+  end
+
+  defp make_client_args(prompt, pattern) do
+    payload = %{"prompt" => prompt}
+
+    cond do
+      pattern == "" -> {payload, :completion}
+      true -> {payload, :rellm}
+    end
+  end
+end
+```
+
+```elixir
+PromptHistoryInterface.new(client)
 ```
