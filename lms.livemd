@@ -100,13 +100,19 @@ end
 defimpl LMAPI, for: LMServerClient do
   require HTTPoison
 
+  @default_args %{"prompt" => "A cat walks into a bar"}
+
   @type api_response :: {:ok, String.t()} | {:error, String.t()}
   @spec get_completion_response(
           client :: LMServerClient.t(),
           payload :: %{},
           completion_type :: :rellm | :completion
         ) :: api_response()
-  def get_completion_response(%LMServerClient{model: model, url: url}, payload, completion_type) do
+  def get_completion_response(
+        %LMServerClient{model: model, url: url},
+        payload \\ @default_args,
+        completion_type
+      ) do
     updated_payload = payload |> get_updated_payload(completion_type)
     {model, url, updated_payload} |> get_response(completion_type) |> get_response_text()
   end
@@ -144,7 +150,145 @@ end
 ```
 
 ```elixir
+defmodule OpenAIClient do
+  defstruct [:openai_key, :model]
+
+  def new(model, openai_key \\ nil, openai_key_path \\ nil) do
+    key =
+      case openai_key do
+        nil -> load_openai_key(openai_key_path)
+        _ -> openai_key
+      end
+
+    %OpenAIClient{:model => model, :openai_key => key}
+  end
+
+  defp load_openai_key(path \\ "openai_medsi_key.txt") do
+    {:ok, key} = File.read(Path.expand(path))
+    String.trim(key)
+  end
+
+  def default_completion_payload(model) do
+    %{
+      "model" => model,
+      "prompt" => "A cat walks into a bar",
+      "temperature" => 0.9,
+      "max_tokens" => 150,
+      "top_p" => 1,
+      "frequency_penalty" => 0.0,
+      "presence_penalty" => 0.6,
+      "stop" => [" Human:", " AI:"]
+    }
+  end
+
+  def default_chat_payload(model) do
+    %{
+      "model" => model,
+      "messages" => [%{"role" => "user", "content" => "A cat walks into a bar"}],
+      "temperature" => 0.9,
+      "max_tokens" => 15
+    }
+  end
+
+  def get_default_payload(model) do
+    cond do
+      is_completion_model_name(model) -> default_completion_payload(model)
+      true -> default_chat_payload(model)
+    end
+  end
+
+  def is_completion_model_name(model) do
+    !String.contains?(model, "gpt-3.5") && !String.contains?(model, "gpt-4")
+  end
+end
+
+defimpl LMAPI, for: OpenAIClient do
+  require HTTPoison
+
+  def get_completion_response(
+        client,
+        payload,
+        completion_type
+      ) do
+    url = get_url(client.model)
+    default_payload = OpenAIClient.get_default_payload(client.model)
+    updated_payload = {client.model, default_payload} |> get_payload(payload)
+    {client, updated_payload} |> get_api_response(url) |> get_text_result()
+  end
+
+  defp get_chat_payload(default_chat_payload, payload) do
+    {prompt, payload_without_prompt} = payload |> Map.pop("prompt")
+
+    prompt_payload =
+      case prompt do
+        nil ->
+          %{}
+
+        _ ->
+          %{
+            "messages" => [%{"role" => "user", "content" => prompt}]
+          }
+      end
+
+    default_chat_payload
+    |> NestedUpdater.update(payload_without_prompt)
+    |> NestedUpdater.update(prompt_payload)
+  end
+
+  defp get_payload({model, default_payload}, payload) do
+    cond do
+      OpenAIClient.is_completion_model_name(model) ->
+        default_payload |> NestedUpdater.update(payload)
+
+      true ->
+        default_payload |> get_chat_payload(payload)
+    end
+  end
+
+  defp get_url(model) do
+    if OpenAIClient.is_completion_model_name(model) do
+      "https://api.openai.com/v1/completions"
+    else
+      "https://api.openai.com/v1/chat/completions"
+    end
+  end
+
+  defp get_api_response({client, payload}, url) do
+    headers = [
+      {"Content-Type", "application/json"},
+      {"Authorization", "Bearer #{client.openai_key}"}
+    ]
+
+    request_body = payload |> Poison.encode!()
+    options = [recv_timeout: 10000, timeout: 10000]
+    HTTPoison.post(url, request_body, headers, options)
+  end
+
+  defp get_text_result(%{"choices" => choices}) do
+    [%{"text" => text} | _] = choices
+    {:ok, text}
+  end
+
+  defp get_text_result(%{"error" => error}) do
+    {:error, error["message"]}
+  end
+
+  defp get_text_result(%{"message" => message}) do
+    message["content"]
+  end
+end
+```
+
+```elixir
 client = %LMServerClient{model: "falcon40b-instruct", url: "http://172.17.38.42:8765"}
+```
+
+```elixir
+LMAPI.get_completion_response(client, %{"prompt" => "A cat walks into a bar"}, :completion)
+```
+
+```elixir
+client = OpenAIClient.new("gpt-3.5-turbo", "/home/kuba/.keys/openai_key.txt")
 ```
 
 ```elixir
