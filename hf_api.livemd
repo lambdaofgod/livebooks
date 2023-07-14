@@ -1,0 +1,52 @@
+# HF API
+
+```elixir
+Mix.install([
+  {:poison, "~> 4.0"},
+  {:httpoison, "~> 1.8"}
+])
+```
+
+## Section
+
+```elixir
+defmodule HFClient do
+  require HTTPoison
+
+  defstruct [:model_name, :api_token]
+
+  def call_hf_image_api(client, image_path) do
+    url = "https://api-inference.huggingface.co/models/#{client.model_name}"
+
+    headers = [
+      {"Authorization", "Bearer #{client.api_token}"}
+    ]
+
+    response = HTTPoison.post!(url, [{:file, Path.expand(image_path)}], headers)
+
+    case response do
+      {:ok, response} -> {:ok, Poison.decode!(response.body)}
+      other -> other
+    end
+  end
+
+  defp load_image(image_path) do
+    {:ok, image_data} = File.read(image_path)
+    image_data
+  end
+end
+```
+
+```elixir
+{:ok, api_token} = File.read("hf_api_token.txt")
+:ok
+```
+
+```elixir
+client = %HFClient{model_name: "jinhybr/OCR-Donut-CORD", api_token: api_token}
+:ok
+```
+
+```elixir
+HFClient.call_hf_image_api(client, "~/Downloads/6.jpg")
+```
