@@ -153,7 +153,7 @@ end
 defmodule OpenAIClient do
   defstruct [:openai_key, :model]
 
-  def new(model, openai_key \\ nil, openai_key_path \\ nil) do
+  def new(model, openai_key, openai_key_path \\ "~/home/.keys") do
     key =
       case openai_key do
         nil -> load_openai_key(openai_key_path)
@@ -213,7 +213,11 @@ defimpl LMAPI, for: OpenAIClient do
     url = get_url(client.model)
     default_payload = OpenAIClient.get_default_payload(client.model)
     updated_payload = {client.model, default_payload} |> get_payload(payload)
-    {client, updated_payload} |> get_api_response(url) |> get_text_result()
+
+    {client, updated_payload}
+    |> get_api_response(url)
+    |> get_response_body()
+    |> get_text_result()
   end
 
   defp get_chat_payload(default_chat_payload, payload) do
@@ -264,23 +268,29 @@ defimpl LMAPI, for: OpenAIClient do
     HTTPoison.post(url, request_body, headers, options)
   end
 
-  defp get_text_result(%{"choices" => choices}) do
-    [%{"text" => text} | _] = choices
+  defp get_response_body({flag, %HTTPoison.Response{body: encoded_body}}),
+    do: {flag, encoded_body |> Poison.decode!()}
+
+  defp get_response_body({flag, encoded_body}), do: {flag, encoded_body}
+
+  defp get_text_result({:ok, results}) do
+    text =
+      case results do
+        %{"choices" => [%{"message" => %{"content" => text}} | _]} -> text
+        %{"choices" => [%{"text" => text} | _]} -> text
+      end
+
     {:ok, text}
   end
 
-  defp get_text_result(%{"error" => error}) do
-    {:error, error["message"]}
-  end
-
-  defp get_text_result(%{"message" => message}) do
-    message["content"]
+  defp get_text_result({:error, other}) do
+    {:error, other}
   end
 end
 ```
 
 ```elixir
-client = %LMServerClient{model: "falcon40b-instruct", url: "http://172.17.38.42:8765"}
+client = %LMServerClient{model: "falcon40b-instruct", url: "http://localhost:8765"}
 ```
 
 ```elixir
@@ -288,7 +298,8 @@ LMAPI.get_completion_response(client, %{"prompt" => "A cat walks into a bar"}, :
 ```
 
 ```elixir
-client = OpenAIClient.new("gpt-3.5-turbo", "/home/kuba/.keys/openai_key.txt")
+client = OpenAIClient.new("gpt-3.5-turbo", nil, "/home/kuba/.keys/openai_key.txt")
+:ok
 ```
 
 ```elixir
