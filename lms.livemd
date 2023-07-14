@@ -33,20 +33,38 @@ end
 ```
 
 ```elixir
-defmodule LMClient do
-  require HTTPoison
+defprotocol Utility do
+  def type(value)
+end
 
+defimpl Utility, for: BitString do
+  def type(_value), do: "string"
+end
+
+defimpl Utility, for: Integer do
+  def type(_value), do: "integer"
+end
+```
+
+```elixir
+defprotocol LMAPI do
+  @type payload :: %{}
+  @type completion_type :: :completion | :rellm
+  @type api_response :: {:ok, String.t()} | {:error, String.t()}
+  @spec get_completion_response(
+          client :: Any.t(),
+          payload :: payload(),
+          completion_type :: completion_type()
+        ) :: api_response()
+  def get_completion_response(client, payload, completion_type)
+end
+```
+
+```elixir
+defmodule LMServerClient do
   defstruct [:model, :url]
 
-  def get_completion_response(client, payload, :completion) do
-    client |> get_response(payload, true) |> get_response_text
-  end
-
-  def get_completion_response(client, payload, :rellm) do
-    client |> get_response(payload, false) |> get_response_text
-  end
-
-  def example_payload do
+  def default_payload do
     %{
       "prompt" => "User: give at least three examples of fruits\n Assistant: ",
       "min_length" => 3,
@@ -72,35 +90,46 @@ defmodule LMClient do
   end
 
   def rellm_payload do
-    NestedUpdater.update(example_payload, %{"pattern" => "(.* ){5}"})
+    NestedUpdater.update(default_payload(), %{"pattern" => "(.* ){5}"})
   end
 
-  defp get_payload(use_rellm) do
-    cond do
-      use_rellm -> example_payload()
-      true -> rellm_payload()
-    end
+  def get_default_payload(:rellm), do: rellm_payload()
+  def get_default_payload(_), do: default_payload()
+end
+
+defimpl LMAPI, for: LMServerClient do
+  require HTTPoison
+
+  @type api_response :: {:ok, String.t()} | {:error, String.t()}
+  @spec get_completion_response(
+          client :: LMServerClient.t(),
+          payload :: %{},
+          completion_type :: :rellm | :completion
+        ) :: api_response()
+  def get_completion_response(%LMServerClient{model: model, url: url}, payload, completion_type) do
+    updated_payload = payload |> get_updated_payload(completion_type)
+    {model, url, updated_payload} |> get_response(completion_type) |> get_response_text()
   end
 
-  defp get_request_body(model, payload, use_rellm) do
-    NestedUpdater.update(get_payload(use_rellm), payload) |> Poison.encode!()
+  defp get_updated_payload(payload, completion_type) do
+    NestedUpdater.update(LMServerClient.get_default_payload(completion_type), payload)
   end
 
-  defp get_response(client, payload, use_rellm) do
-    request_body = get_request_body(client.model, payload, use_rellm)
+  defp get_response({model, url, payload}, use_rellm) do
+    request_body = payload |> Poison.encode!()
     options = [recv_timeout: 10000, timeout: 10000]
     endpoint = get_endpoint(use_rellm)
 
     HTTPoison.post(
-      "#{client.url}/#{endpoint}",
+      "#{url}/#{endpoint}",
       request_body,
       [{"Content-type", "application/json"}],
       options
     )
   end
 
-  defp get_endpoint(true), do: "generate"
-  defp get_endpoint(false), do: "rellm_generate"
+  defp get_endpoint(:rellm), do: "rellm_generate"
+  defp get_endpoint(_), do: "generate"
 
   defp get_response_text({:ok, response}) do
     body = Poison.decode!(response.body)
@@ -115,11 +144,11 @@ end
 ```
 
 ```elixir
-client = %LMClient{model: "falcon40b-instruct", url: "http://172.17.38.42:8765"}
+client = %LMServerClient{model: "falcon40b-instruct", url: "http://172.17.38.42:8765"}
 ```
 
 ```elixir
-LMClient.get_completion_response(client, %{"prompt" => "A cat walks into a bar"}, :completion)
+LMAPI.get_completion_response(client, %{"prompt" => "A cat walks into a bar"}, :completion)
 ```
 
 ```elixir
