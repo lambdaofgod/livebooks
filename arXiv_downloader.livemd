@@ -1,0 +1,115 @@
+# arXiv downloader
+
+```elixir
+Mix.install([
+  {:kino, "~> 0.9.1"},
+  {:poison, "~> 4.0"},
+  {:httpoison, "~> 1.8"},
+  {:floki, "~> 0.34.3"}
+])
+```
+
+## Section
+
+```elixir
+defmodule ArXivUtils do
+  require Regex
+
+  defp get_arxiv_id_by_re(re, url) do
+    case Regex.run(re, url) do
+      nil -> nil
+      [_, capture] -> capture
+    end
+  end
+
+  def get_arxiv_id(url) do
+    abs_id = ~r/arxiv\.org\/abs\/(\d+\.\d+)/ |> get_arxiv_id_by_re(url)
+    pdf_id = ~r/arxiv\.org\/pdf\/(\d+\.\d+)/ |> get_arxiv_id_by_re(url)
+
+    if abs_id != nil do
+      abs_id
+    else
+      pdf_id
+    end
+  end
+end
+```
+
+```elixir
+defmodule ArXivAPI do
+  require HTTPoison
+  require Floki
+  require List
+
+  def get_arxiv_paper_metadata(arxiv_url) do
+    {arxiv_url, ArXivUtils.get_arxiv_id(arxiv_url)} |> get_arxiv_response
+  end
+
+  def get_arxiv_response({arxiv_url, arxiv_id}) do
+    arxiv_id
+    |> get_arxiv_api_uri()
+    |> HTTPoison.get()
+    |> parse_body()
+    |> Map.put("url", arxiv_url)
+  end
+
+  defp parse_body({:ok, %HTTPoison.Response{body: body}}) do
+    {status, parsed_body} = body |> Floki.parse_document()
+    [meta, content] = parsed_body
+
+    map_content = convert_tuples_to_dict(content)
+
+    %{
+      "title" => get_in(map_content, ["feed", "entry", "title"]),
+      "summary" => get_in(map_content, ["feed", "entry", "summary"]),
+      "published" => get_in(map_content, ["feed", "entry", "published"]),
+      "author" => get_authors(map_content)["name"]
+    }
+  end
+
+  defp get_authors(map_content) do
+    map_content |> get_in(["feed", "entry", "author"]) |> Enum.reduce(&merge_dicts_by_list/2)
+  end
+
+  defp get_arxiv_api_uri(arxiv_id) do
+    "http://export.arxiv.org/api/query?id_list=#{arxiv_id}"
+  end
+
+  defp convert_tuples_to_dict({k, v}), do: %{k => convert_tuples_to_dict(v)}
+  defp convert_tuples_to_dict({k, _, v}), do: %{k => convert_tuples_to_dict(v)}
+
+  defp convert_tuples_to_dict(other) do
+    case other do
+      [] ->
+        %{}
+
+      _ when is_bitstring(other) ->
+        other
+
+      _ when is_list(other) ->
+        dicts = Enum.map(other, &convert_tuples_to_dict/1)
+        Enum.reduce(dicts, &merge_dicts_by_list/2)
+    end
+  end
+
+  defp merge_dicts_by_list(d1, d2) do
+    Map.merge(d1, d2, fn k, v1, v2 -> List.flatten([v1, v2]) end)
+  end
+end
+```
+
+```elixir
+abstract_url = "https://arxiv.org/abs/2203.05115"
+```
+
+```elixir
+pdf_url = "https://arxiv.org/pdf/1509.09169.pdf"
+```
+
+```elixir
+abstract_url |> ArXivAPI.get_arxiv_paper_metadata()
+```
+
+```elixir
+
+```
