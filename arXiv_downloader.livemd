@@ -32,6 +32,10 @@ defmodule ArXivUtils do
       pdf_id
     end
   end
+
+  def get_arxiv_pdf_url(arxiv_id) do
+    "http://arxiv.org/pdf/#{arxiv_id}/pdf"
+  end
 end
 ```
 
@@ -111,5 +115,68 @@ abstract_url |> ArXivAPI.get_arxiv_paper_metadata()
 ```
 
 ```elixir
+ArXivUtils.get_arxiv_id(abstract_url) |> ArXivUtils.get_arxiv_pdf_url()
+```
 
+```elixir
+
+```
+
+```elixir
+save_dir = Path.expand("~/Downloads/czytnik")
+```
+
+```elixir
+folders = Path.wildcard(save_dir <> "/*")
+folder_options = for f <- folders, File.dir?(f), do: {f, Path.basename(f)}
+```
+
+```elixir
+Kino.Input.select("folder", folder_options)
+```
+
+```elixir
+defmodule ArXivDownloader do
+  def download_pdf(arxiv_url, save_dir) do
+    {title, _} = arxiv_url |> ArXivAPI.get_arxiv_paper_metadata() |> Map.pop("title")
+    save_path = save_dir |> Path.expand() |> Path.join(get_pdf_filename(title))
+    result = arxiv_url |> get_pdf_content() |> save_pdf_content(save_path)
+
+    case result do
+      {:ok, _} -> IO.puts("Written PDF to #{save_path}")
+      {:error, _} -> IO.puts("Error downloading #{title}")
+    end
+  end
+
+  def get_pdf_content(arxiv_url) do
+    pdf_url = arxiv_url |> ArXivUtils.get_arxiv_id() |> ArXivUtils.get_arxiv_pdf_url()
+    pdf_url |> get_pdf_content_from_pdf_url()
+  end
+
+  defp get_pdf_content_from_pdf_url(pdf_url) do
+    case HTTPoison.get!(pdf_url) do
+      %HTTPoison.Response{body: body} -> {:ok, body}
+      _ -> {:error, nil}
+    end
+  end
+
+  defp get_pdf_filename(title) do
+    Enum.join(String.split(title), "_") <> ".pdf"
+  end
+
+  defp save_pdf_content({:ok, body}, save_path) do
+    {File.write(save_path, body), nil}
+  end
+
+  defp save_pdf_content(other, _) do
+    other
+  end
+end
+```
+
+```elixir
+ArXivDownloader.download_pdf(
+  "https://arxiv.org/abs/2203.05115",
+  "/home/kuba/Downloads/czytnik/tmp"
+)
 ```
