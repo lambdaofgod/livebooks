@@ -143,8 +143,8 @@ defmodule ArXivDownloader do
     result = arxiv_url |> get_pdf_content() |> save_pdf_content(save_path)
 
     case result do
-      {:ok, _} -> IO.puts("Written PDF to #{save_path}")
-      {:error, _} -> IO.puts("Error downloading #{title}")
+      {:ok, _} -> "Written PDF to #{save_path}"
+      {:error, _} -> "Error downloading #{title}"
     end
   end
 
@@ -175,8 +175,59 @@ end
 ```
 
 ```elixir
+
+```
+
+```elixir
 ArXivDownloader.download_pdf(
   "https://arxiv.org/abs/2203.05115",
   "/home/kuba/Downloads/czytnik/tmp"
 )
+```
+
+```elixir
+defmodule ArXivDownloaderInterface do
+  def new(base_dir) do
+    {inputs, form, frame} = make_widgets(base_dir)
+    form |> Kino.render()
+    frame |> Kino.render()
+    wire_widgets(frame, form)
+  end
+
+  def make_widgets(base_dir) do
+    folders = base_dir |> Path.expand() |> Path.join("*") |> Path.wildcard()
+
+    folder_options = for f <- folders, File.dir?(f), do: {f, Path.basename(f)}
+
+    inputs = [
+      arxiv_url: Kino.Input.text("ArXiv URL"),
+      save_dir: Kino.Input.select("directory", folder_options)
+    ]
+
+    frame = Kino.Frame.new()
+    form = Kino.Control.form(inputs, submit: "Send", reset_on_submit: [:arxiv_url, :save_dir])
+    {inputs, form, frame}
+  end
+
+  def wire_widgets(frame, form) do
+    Kino.listen(form, fn %{data: %{arxiv_url: arxiv_url, save_dir: save_dir}, origin: origin} ->
+      if arxiv_url != "" do
+        add_markdown_to_frame(frame, "**arxiv_url**: #{arxiv_url}")
+        downloader_status = ArXivDownloader.download_pdf(arxiv_url, save_dir)
+        add_markdown_to_frame(frame, downloader_status)
+      else
+        content = Kino.Markdown.new("_ERROR! You need a name and message to submit..._")
+        Kino.Frame.append(frame, content, to: origin)
+      end
+    end)
+  end
+
+  def add_markdown_to_frame(frame, markdown_str) do
+    Kino.Frame.append(frame, Kino.Markdown.new(markdown_str))
+  end
+end
+```
+
+```elixir
+ArXivDownloaderInterface.new("~/Downloads/czytnik")
 ```
