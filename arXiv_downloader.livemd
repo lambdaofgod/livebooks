@@ -36,6 +36,10 @@ defmodule ArXivUtils do
   def get_arxiv_pdf_url(arxiv_id) do
     "http://arxiv.org/pdf/#{arxiv_id}/pdf"
   end
+
+  def get_arxiv_bibtex_url(arxiv_id) do
+    "https://arxiv.org/bibtex/#{arxiv_id}"
+  end
 end
 ```
 
@@ -44,20 +48,38 @@ defmodule ArXivAPI do
   require HTTPoison
   require Floki
   require List
+  require Poison
 
   def get_arxiv_paper_metadata(arxiv_url) do
-    {arxiv_url, ArXivUtils.get_arxiv_id(arxiv_url)} |> get_arxiv_response
+    arxiv_id = arxiv_url |> ArXivUtils.get_arxiv_id()
+
+    Map.merge(
+      %{
+        "url" => arxiv_url,
+        "bibtex" => arxiv_id |> get_arxiv_bibtex()
+      },
+      arxiv_id |> get_arxiv_response()
+    )
   end
 
-  def get_arxiv_response({arxiv_url, arxiv_id}) do
+  def get_arxiv_response(arxiv_id) do
     arxiv_id
     |> get_arxiv_api_uri()
     |> HTTPoison.get()
-    |> parse_body()
-    |> Map.put("url", arxiv_url)
+    |> parse_metadata_body()
   end
 
-  defp parse_body({:ok, %HTTPoison.Response{body: body}}) do
+  def get_arxiv_bibtex(arxiv_id) do
+    res =
+      arxiv_id
+      |> ArXivUtils.get_arxiv_bibtex_url()
+      |> HTTPoison.get()
+      |> parse_bibtex_body()
+  end
+
+  defp parse_bibtex_body({:ok, %HTTPoison.Response{body: body}}), do: body
+
+  defp parse_metadata_body({:ok, %HTTPoison.Response{body: body}}) do
     {status, parsed_body} = body |> Floki.parse_document()
     [meta, content] = parsed_body
 
@@ -185,20 +207,105 @@ ArXivDownloader.download_pdf(
 )
 ```
 
+### TODO implement more generic interface with macros
+
 ```elixir
-defmodule ArXivDownloaderInterface do
-  def new(base_dir) do
-    {inputs, form, frame} = make_widgets(base_dir)
+defmodule UISubComponents do
+  defstruct [:inputs, :form, :frame]
+end
+
+defprotocol ArXivUIComponent do
+  def new(args)
+  def wire_widgets(args)
+  def listen_fn(frame, callback)
+  def make_widgets(args)
+
+  def add_markdown_to_frame(frame, markdown_str) do
+    Kino.Frame.append(frame, Kino.Markdown.new(markdown_str))
+  end
+end
+
+defmodule ArXivDownloaderArgs do
+  @enforce_keys [:base_dir]
+  defstruct [:base_dir, :folder_opts]
+end
+
+defimpl ArXivUIComponent, for: ArXivDownloaderArgs do
+  def new(args) do
+    {inputs, form, frame} = args |> make_widgets()
     form |> Kino.render()
     frame |> Kino.render()
     wire_widgets(frame, form)
   end
 
-  def make_widgets(base_dir) do
+  def make_widgets(%ArXivDownloaderArgs{base_dir: base_dir, folder_opts: folder_opts}) do
+    folder_options =
+      cond do
+        folder_opts == nil -> get_folders_options(base_dir)
+        true -> get_folders_options(folder_opts)
+      end
+
+    inputs = [
+      arxiv_url: Kino.Input.text("ArXiv URL"),
+      save_dir: Kino.Input.select("directory", folder_opts)
+    ]
+
+    frame = Kino.Frame.new()
+    form = Kino.Control.form(inputs, submit: "Send", reset_on_submit: [:arxiv_url, :save_dir])
+    {inputs, form, frame}
+  end
+
+  defp get_folder_options(folders) when is_list(folders) do
+    for f <- folders, File.dir?(f), do: {f, Path.basename(f)}
+  end
+
+  defp get_folders_options(base_dir) do
     folders = base_dir |> Path.expand() |> Path.join("*") |> Path.wildcard()
+    for f <- folders, File.dir?(f), do: {f, Path.basename(f)}
+  end
 
-    folder_options = for f <- folders, File.dir?(f), do: {f, Path.basename(f)}
+  def wire_widgets(frame, form) do
+    Kino.listen(form, frame |> listen_fn)
+  end
 
+  defp listen_fn(frame, %{data: %{arxiv_url: arxiv_url, save_dir: save_dir}, origin: origin}) do
+    if arxiv_url != "" do
+      add_markdown_to_frame(frame, "**arxiv_url**: #{arxiv_url}")
+      downloader_status = ArXivDownloader.download_pdf(arxiv_url, save_dir)
+      add_markdown_to_frame(frame, downloader_status)
+    else
+      content = Kino.Markdown.new("_ERROR! You need a name and message to submit..._")
+      Kino.Frame.append(frame, content, to: origin)
+    end
+  end
+end
+```
+
+```elixir
+
+```
+
+```elixir
+defmodule ArXivDownloaderInterface do
+  def new(base_dir, folder_opts \\ nil) do
+    folder_options =
+      cond do
+        folder_opts == nil -> get_folders_options(base_dir)
+        true -> folder_opts
+      end
+
+    {inputs, form, frame} = base_dir |> make_widgets(folder_options)
+    form |> Kino.render()
+    frame |> Kino.render()
+    wire_widgets(frame, form)
+  end
+
+  defp get_folders_options(base_dir) do
+    folders = base_dir |> Path.expand() |> Path.join("*") |> Path.wildcard()
+    for f <- folders, File.dir?(f), do: {f, Path.basename(f)}
+  end
+
+  def make_widgets(base_dir, folder_options) do
     inputs = [
       arxiv_url: Kino.Input.text("ArXiv URL"),
       save_dir: Kino.Input.select("directory", folder_options)
@@ -210,22 +317,104 @@ defmodule ArXivDownloaderInterface do
   end
 
   def wire_widgets(frame, form) do
-    Kino.listen(form, fn %{data: %{arxiv_url: arxiv_url, save_dir: save_dir}, origin: origin} ->
-      if arxiv_url != "" do
-        add_markdown_to_frame(frame, "**arxiv_url**: #{arxiv_url}")
-        downloader_status = ArXivDownloader.download_pdf(arxiv_url, save_dir)
-        add_markdown_to_frame(frame, downloader_status)
-      else
-        content = Kino.Markdown.new("_ERROR! You need a name and message to submit..._")
-        Kino.Frame.append(frame, content, to: origin)
-      end
-    end)
+    Kino.listen(form, frame |> listen_fn)
+  end
+
+  defp listen_fn(frame, %{data: %{arxiv_url: arxiv_url, save_dir: save_dir}, origin: origin}) do
+    if arxiv_url != "" do
+      add_markdown_to_frame(frame, "**arxiv_url**: #{arxiv_url}")
+      downloader_status = ArXivDownloader.download_pdf(arxiv_url, save_dir)
+      add_markdown_to_frame(frame, downloader_status)
+    else
+      content = Kino.Markdown.new("_ERROR! You need a name and message to submit..._")
+      Kino.Frame.append(frame, content, to: origin)
+    end
   end
 
   def add_markdown_to_frame(frame, markdown_str) do
     Kino.Frame.append(frame, Kino.Markdown.new(markdown_str))
   end
 end
+```
+
+```elixir
+defmodule MacroExample do
+  defmacro get_symbol(x) do
+    name
+  end
+
+  defmacro make_function(var, fn_expr, var_assign) do
+    name = var!(var)
+
+    quote do
+      fn %{data: %{name => unquote(var)}} ->
+        unquote(var) = unquote(var_assign)
+        unquote(fn_expr)
+      end
+    end
+  end
+
+  defmacro make_dict(var, val) do
+    quote do
+      %{unquote(var) => unquote(val)}
+    end
+  end
+end
+```
+
+```elixir
+require MacroExample
+
+x = 1
+MacroExample.make_dict(:x, 1).x
+```
+
+```elixir
+Macro.expand(
+  f =
+    MacroExample.make_function(
+      x,
+      x * 2,
+      x + 1
+    ),
+  __ENV__
+)
+```
+
+```elixir
+f =
+  MacroExample.make_function(
+    x,
+    x * 2,
+    x + 1
+  )
+
+f.(%{data: %{x: 1}})
+```
+
+```elixir
+import Macro
+
+Macro.pipe(
+  quote do
+    x + 1
+  end,
+  1,
+  0
+)
+```
+
+```elixir
+Map.keys(__ENV__)
+```
+
+```elixir
+
+```
+
+```elixir
+v = "1"
+TurboArXivDownloaderInterface.(v)
 ```
 
 ```elixir

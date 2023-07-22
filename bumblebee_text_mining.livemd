@@ -1,0 +1,72 @@
+# Bumblebee
+
+```elixir
+Mix.install(
+  [
+    {:kino, "~> 0.9.1"},
+    {:poison, "~> 4.0"},
+    {:httpoison, "~> 1.8"},
+    {:google_api_you_tube, "~> 0.40"},
+    {:goth, "~> 1.4.0"},
+    {:temple, "~> 0.12"},
+    {:bumblebee, "~> 0.3.0"},
+    {:exla, ">= 0.0.0"}
+  ],
+  config: [nx: [default_backend: EXLA.Backend]]
+)
+```
+
+## Section
+
+```elixir
+defmodule TextEmbedder do
+  import Nx
+
+  defstruct [:model, :tokenizer]
+
+  def new(model_name \\ "sentence-transformers/all-MiniLM-L6-v2") do
+    {:ok, model} = Bumblebee.load_model({:hf, model_name})
+    {:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, model_name})
+    %TextEmbedder{model: model, tokenizer: tokenizer}
+  end
+
+  def mean_pooling(model_output, attention_mask) do
+    input_mask_expanded = Nx.new_axis(attention_mask, -1)
+
+    model_output
+    |> Nx.multiply(input_mask_expanded)
+    |> Nx.sum(axes: [1])
+    |> Nx.divide(Nx.sum(input_mask_expanded, axes: [1]))
+  end
+
+  def get_embeddings(embedder, texts) do
+    inputs = Bumblebee.apply_tokenizer(embedder.tokenizer, texts)
+    embedding = Axon.predict(embedder.model.model, embedder.model.params, inputs, compiler: EXLA)
+
+    embedding.hidden_state
+    |> mean_pooling(inputs["attention_mask"])
+  end
+
+  def get_distances(reference_embeddings, other_embeddings) do
+    reference_embeddings
+    |> Nx.multiply(other_embeddings |> Nx.transpose())
+  end
+end
+
+defprotocol ItemListComparator do
+  def compare_item_lists(this, other)
+
+  def embed(this)
+end
+
+defimpl ItemListComparator, for: YoutubePlaylist do
+  def embed(this) do
+  end
+end
+
+repository_id = "CompVis/stable-diffusion-v1-4"
+{:ok, featurizer} = Bumblebee.load_featurizer({:hf, repository_id, subdir: "feature_extractor"})
+{:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, "openai/clip-vit-large-patch14"})
+
+# {:ok, clip} = Bumblebee.load_model({:hf, repository_id, subdir: "text_encoder"})
+```
