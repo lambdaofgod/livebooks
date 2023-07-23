@@ -3,219 +3,36 @@
 ```elixir
 Mix.install([
   {:kino, "~> 0.9.1"},
-  {:poison, "~> 4.0"},
-  {:httpoison, "~> 1.8"},
-  {:google_api_you_tube, "~> 0.40"},
-  {:goth, "~> 1.4.0"},
-  {:temple, "~> 0.12"}
+  # {:poison, "~> 4.0"},
+  # {:httpoison, "~> 1.8"},
+  # {:google_api_you_tube, "~> 0.40"},
+  {:youtube_organizer, path: Path.join([__DIR__, "youtube_organizer"])}
 ])
 ```
 
 ## Section
 
 ```elixir
-defmodule AuthWrapper do
-  defstruct [:token]
-
-  def new(path, sym \\ :auth) do
-    credentials = File.read!(Path.expand(path)) |> Poison.decode!()
-
-    source = {:refresh_token, credentials, []}
-    _ = Goth.start_link(name: sym, source: source)
-    t = Goth.fetch!(sym).token
-    %AuthWrapper{token: t}
-  end
-end
-```
-
-```elixir
-auth = AuthWrapper.new("creds.json")
+auth = YTOrg.AuthWrapper.new("creds.json")
 :ok
 ```
 
 ```elixir
-defmodule YoutubePlaylistMetadata do
-  @enforce_keys [:id, :title]
-  defstruct [:id, :title, :channel_id]
-end
+playlists =
+  %YTOrg.YoutubePlaylistFetcher{auth: auth}
+  |> YTOrg.YoutubePlaylistFetcher.fetch_youtube_playlists()
 
-defmodule YoutubeVideo do
-  defstruct [:id, :title, :url, :description, :thumbnails, :playlist_item_id]
-end
-
-defmodule YoutubeRecordLoader do
-  def from_record(type, record) do
-    YoutubeRecordModel.from_record(type.__struct__(), record)
-  end
-end
-
-defprotocol YoutubeRecordModel do
-  def from_record(m, record)
-end
-
-defimpl YoutubeRecordModel, for: YoutubePlaylistMetadata do
-  def from_record(m, rec) do
-    %{"id" => id, "snippet" => %{"title" => title}} = rec
-    %YoutubePlaylistMetadata{id: id, title: title}
-  end
-end
-
-defimpl YoutubeRecordModel, for: YoutubeVideo do
-  def from_record(m, record), do: from_playlist_item_record(record)
-
-  defp from_playlist_item_record(record) do
-    %{"id" => item_id, "snippet" => %{"title" => title, "description" => description}} = record
-    id = get_video_id(record)
-
-    yt_vid = %YoutubeVideo{
-      id: id,
-      title: title,
-      description: description,
-      playlist_item_id: item_id,
-      url: get_url(id)
-    }
-
-    maybe_add_thumbnails(yt_vid, record["snippet"])
-  end
-
-  defp get_video_id(%{"snippet" => %{"resourceId" => res}}) do
-    %{"videoId" => id} = res
-    id
-  end
-
-  defp get_url(id) do
-    "https://www.youtube.com/watch?v=#{id}"
-  end
-
-  defp maybe_add_thumbnails(yt_vid, %{"thumbnails" => thumbnails}) do
-    Map.put(yt_vid, :thumbnails, thumbnails)
-  end
-
-  defp maybe_add_thumbnails(yt_vid, _) do
-    yt_vid
-  end
-end
-```
-
-```elixir
-defmodule YouTubeClient do
-  @moduledoc """
-  A simple YouTube client.
-  """
-  require Poison
-  require HTTPoison
-
-  @youtube_api_url "https://www.googleapis.com"
-
-  def fetch_playlist_items(auth_wrapper, playlist_id) do
-    url = "#{@youtube_api_url}/youtube/v3/playlistItems?part=snippet&playlistId=#{playlist_id}"
-    headers = [{"Authorization", "Bearer #{auth_wrapper.token}"}]
-    {:ok, %{status_code: 200, body: body}} = HTTPoison.get(url, headers)
-
-    case Poison.decode(body) do
-      {:ok, response} ->
-        response["items"]
-
-      # |> Enum.map(&(&1["snippet"]["title"]))
-
-      {:error, error} ->
-        IO.puts("Failed to decode JSON: #{error}")
-        :error
-    end
-  end
-
-  def get_user_playlists_information(auth_wrapper, user_id) do
-    auth_wrapper
-    |> call_list_user_playlist(user_id)
-    |> parse_user_result_body()
-  end
-
-  defp parse_user_result_body({:ok, body}) do
-    youtube_playlists =
-      body
-      |> Poison.decode!()
-
-    youtube_playlists |> inspect() |> IO.puts()
-    # yp_body = youtube_playlists |> Map.get("pageInfo")
-    # yp_body |> inspect() |> IO.puts()
-    yp_body =
-      youtube_playlists
-      |> Map.get("items")
-      |> Enum.map(fn record ->
-        YoutubeRecordLoader.from_record(YoutubePlaylistMetadata, record)
-      end)
-
-    {:ok, yp_body}
-  end
-
-  defp parse_user_result_body(result = {:error, _}) do
-    result
-  end
-
-  defp call_list_user_playlist(auth_wrapper, user_id) do
-    url_part =
-      cond do
-        user_id == "mine" -> "mine=true"
-        true -> "channelId=#{user_id}"
-      end
-
-    headers = [{"Authorization", "Bearer #{auth_wrapper.token}"}]
-    url = "#{@youtube_api_url}/youtube/v3/playlists?part=snippet&#{url_part}&maxResults=50"
-    {:ok, response} = HTTPoison.get(url, headers)
-    %{status_code: 200, body: body} = response
-    {:ok, body}
-  end
-end
-```
-
-```elixir
-defmodule YoutubePlaylist do
-  defstruct [:metadata, :videos]
-end
-
-defmodule YoutubePlaylistFetcher do
-  @auth AuthWrapper.new("creds.json")
-
-  @doc ~S"""
-  ## Examples
-      iex> playlists = YoutubePlaylistFetcher.fetch_youtube_playlists_metadata()
-      ...> 0 < (playlists |> Enum.count())
-      true
-
-  """
-  def fetch_youtube_playlists_metadata() do
-    {:ok, playlists_metadata} = @auth |> YouTubeClient.get_user_playlists_information("mine")
-    playlists_metadata
-  end
-
-  def fetch_youtube_playlists() do
-    {:ok, playlists_metadata} = @auth |> YouTubeClient.get_user_playlists_information("mine")
-
-    for metadata <- playlists_metadata do
-      %YoutubePlaylist{metadata: metadata, videos: fetch_youtube_playlist_videos(metadata.id)}
-    end
-  end
-
-  @doc ~S"""
-  fetches videos given a yt playlist id
-  ## Examples
-
-      iex> playlist_items = YoutubePlaylistFetcher.fetch_youtube_playlist_videos(
-      ...>  "PLPfZNpFCEKxk55ry3l3OsPEoiOXumCNKU")
-      ...> 0 < playlist_items |> Enum.count()
-      true
-  """
-  def fetch_youtube_playlist_videos(playlist_id) do
-    playlist_items = @auth |> YouTubeClient.fetch_playlist_items(playlist_id)
-    playlist_items |> Enum.map(fn rec -> YoutubeRecordLoader.from_record(YoutubeVideo, rec) end)
-  end
-end
-```
-
-```elixir
-playlists = YoutubePlaylistFetcher.fetch_youtube_playlists()
-[%YoutubePlaylist{videos: [vid | _]} | _] = playlists
+[%YTOrg.YoutubePlaylist{videos: [vid | _]} | _] = playlists
 vid
+```
+
+```elixir
+[%YTOrg.YoutubePlaylist{videos: [vid | _]} | _] = playlists
+vid
+```
+
+```elixir
+alias YTOrg.{YoutubePlaylist}
 ```
 
 ```elixir
@@ -228,8 +45,11 @@ defmodule YoutubePlaylistInterface do
     end
   end
 
-  def new() do
-    YoutubePlaylistFetcher.fetch_youtube_playlists() |> new()
+  def from_google_creds(google_creds_path \\ "creds.json") do
+    google_creds_path
+    |> YoutubePlaylistFetcher.new()
+    |> YoutubePlaylistFetcher.fetch_youtube_playlists()
+    |> new()
   end
 
   def new(playlists) do
