@@ -7,7 +7,8 @@ defmodule TextMining.MixProject do
       version: "0.1.0",
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      config: [nx: [default_backend: EXLA.Backend]]
     ]
   end
 
@@ -22,7 +23,10 @@ defmodule TextMining.MixProject do
   defp deps do
     [
       {:bumblebee, "~> 0.3.0"},
-      {:exla, ">= 0.0.0"}
+      {:exla, ">= 0.0.0"},
+      {:scholar, "~> 0.1.0"},
+      {:nx, "~> 0.5.0", [override: true, env: :prod, hex: "nx", repo: "hexpm", optional: false]},
+      {:dialyxir, "~> 1.3", only: [:dev], runtime: false}
     ]
   end
 end

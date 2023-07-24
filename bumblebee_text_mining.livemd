@@ -3,6 +3,7 @@
 ```elixir
 Mix.install(
   [
+    {:scholar, "~> 0.1.0"},
     {:text_mining, path: Path.join([__DIR__, "text_mining"])}
   ],
   config: [nx: [default_backend: EXLA.Backend]]
@@ -16,7 +17,7 @@ alias TextMining.{EmbeddingComparator, TextComparator, DocumentCreator}
 
 text_comparator = EmbeddingComparator.new()
 
-records =
+documents =
   ["a cat walks into a bar", "another text"]
   |> Enum.map(fn text -> text_comparator |> DocumentCreator.make_document(text) end)
 ```
@@ -25,8 +26,28 @@ records =
 comparison_results =
   text_comparator
   |> TextComparator.compare_documents(
-    records,
-    records,
+    documents,
+    documents,
     2
   )
+```
+
+```elixir
+alias TextMining.TextClusterer
+```
+
+```elixir
+&TextClusterer.get_document_clusters/3
+```
+
+```elixir
+embedder = text_comparator.text_embedder
+```
+
+```elixir
+{clusters, document_clusters} = text_comparator |> TextClusterer.get_clustering(documents, 2)
+```
+
+```elixir
+document_clusters
 ```
