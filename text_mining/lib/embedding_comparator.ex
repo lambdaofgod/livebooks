@@ -1,27 +1,5 @@
-defmodule TextMining.EmbeddingComparatorBehaviour do
-  alias TextMining.{Document, ComparisonResult}
-
-  @callback compare_documents(any(), [Document.t()], [Document.t()], Integer.t()) :: [
-              ComparisonResult.t()
-            ]
-
-  @callback make_document(Map.t()) :: Document.t()
-
-  @callback embed(any(), [Document.t()]) :: Nx.Tensor
-end
-
 defmodule TextMining.EmbeddingComparator do
-  alias TextMining.{Document, ComparisonResult}
-
-  @callback compare_documents(any(), [Document.t()], [Document.t()], Integer.t()) :: [
-              ComparisonResult.t()
-            ]
-
-  @callback make_document(Map.t()) :: Document.t()
-
-  @callback embed(any(), [Document.t()]) :: Nx.Tensor
-
-  alias TextMining.{Document, TextEmbedder, EmbeddingComparator}
+  alias TextMining.TextEmbedder
 
   defstruct [:text_embedder]
 
@@ -29,11 +7,39 @@ defmodule TextMining.EmbeddingComparator do
     embedder = TextMining.TextEmbedder.new(model_name)
     %TextMining.EmbeddingComparator{text_embedder: embedder}
   end
+end
 
-  @behaviour TextMining.EmbeddingComparator
+defimpl TextMining.DocumentCreator, for: TextMining.EmbeddingComparator do
+  alias TextMining.Document
+  @spec make_document(any(), String.t() | Map.t(), String.t()) :: Document.t()
+  def make_document(document_creator, text, document_id) when is_bitstring(text) do
+    document_creator |> make_document(%{"text" => text}, document_id)
+  end
 
-  @impl
-  def compare_records(comparator, reference_list, compared_list, n_closest \\ 1) do
+  def make_document(_document_creator, %{"text" => text} = record, document_id) do
+    id =
+      cond do
+        document_id == nil -> text
+        true -> document_id
+      end
+
+    document_record = Map.delete(record, "text")
+    %Document{text: text, id: id, metadata: document_record}
+  end
+
+  def make_document(document_creator, raw_doc) do
+    document_creator |> make_document(raw_doc, nil)
+  end
+
+  defp get_id(%{"id" => id}), do: id
+  defp get_id(%{"name" => name}), do: name
+  defp get_id(_), do: nil
+end
+
+defimpl TextMining.TextComparator, for: TextMining.EmbeddingComparator do
+  alias TextMining.{Document, ComparisonResult, TextEmbedder}
+
+  def compare_documents(comparator, reference_list, compared_list, n_closest \\ 1) do
     distances = comparator |> get_distances(reference_list, compared_list)
 
     get_comparison_results(
@@ -44,15 +50,9 @@ defmodule TextMining.EmbeddingComparator do
     )
   end
 
-  @impl
-  def make_document(text) do
-    %Document{text: text}
-  end
-
-  @impl
-  def embed(comparator, records) do
+  def embed(comparator, documents) do
     texts =
-      for rec <- records do
+      for rec <- documents do
         rec.text
       end
 
@@ -79,11 +79,11 @@ defmodule TextMining.EmbeddingComparator do
       |> Nx.slice([0, 0], [n_reference, n_closest])
       |> Nx.to_list()
 
-    for {match_indices, row_idx} <- Enum.with_index(indices) do
-      text = Enum.at(reference_documents, row_idx)
+    for {match_indices, row_idx} <- Enum.with_index(indices), into: %{} do
+      doc = Enum.at(reference_documents, row_idx)
 
-      get_comparison_result(
-        text,
+      doc
+      |> get_comparison_result(
         row_idx,
         compared_documents,
         match_indices,
@@ -109,10 +109,12 @@ defmodule TextMining.EmbeddingComparator do
         Nx.to_number(distances[[row_idx, i]])
       end
 
-    %ComparisonResult{
-      compared_document: document,
-      matched_documents: matched_documents,
-      scores: scores
+    matched_result = %{
+      "matched_documents" => matched_documents,
+      "scores" => scores,
+      "document" => document
     }
+
+    {document.id, matched_result}
   end
 end

@@ -12,18 +12,19 @@ Mix.install(
 ## Section
 
 ```elixir
-alias TextMining.EmbeddingComparator
+alias TextMining.{EmbeddingComparator, TextComparator, DocumentCreator}
 
 text_comparator = EmbeddingComparator.new()
 
 records =
-  ["a cat walks into a bar", "another text"] |> Enum.map(&EmbeddingComparator.make_document/1)
+  ["a cat walks into a bar", "another text"]
+  |> Enum.map(fn text -> text_comparator |> DocumentCreator.make_document(text) end)
 ```
 
 ```elixir
 comparison_results =
   text_comparator
-  |> EmbeddingComparator.compare_records(
+  |> TextComparator.compare_documents(
     records,
     records,
     2
