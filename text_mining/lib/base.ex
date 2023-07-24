@@ -15,6 +15,7 @@ defprotocol TextMining.TextComparator do
           Integer.t()
         ) :: [Map.t()]
   def compare_documents(comparator, reference_documents, compared_documents, n_closest)
+  def compare_texts(comparator, reference_texts, compared_texts, n_closest)
 
   @spec embed(any(), [Document.t()]) :: Nx.Tensor
   def embed(comparator, documents)
@@ -31,5 +32,7 @@ end
 
 defprotocol TextMining.TextClusterer do
   #@spec get_clustering_result(any(), [Document.t()], Integer.t) :: Map.t()
-  def get_clustering(clusterer, documents, n_clusters)
+  def fit_clustering(clusterer, documents, n_clusters)
+  def get_closest_cluster(clusterer, document, clusters)
+  def get_closest_document(clusterer, cluster, documents)
 end

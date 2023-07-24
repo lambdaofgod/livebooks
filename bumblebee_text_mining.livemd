@@ -41,13 +41,10 @@ alias TextMining.TextClusterer
 ```
 
 ```elixir
-embedder = text_comparator.text_embedder
+{centroids, document_clusters} = text_comparator |> TextClusterer.get_clustering(documents, 2)
 ```
 
 ```elixir
-{clusters, document_clusters} = text_comparator |> TextClusterer.get_clustering(documents, 2)
-```
-
-```elixir
-document_clusters
+text_comparator
+|> TextClusterer.get_closest_cluster(Enum.at(documents, 1), centroids)
 ```

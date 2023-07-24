@@ -1,19 +1,20 @@
 # Youtube playlists
 
 ```elixir
-Mix.install([
-  {:kino, "~> 0.9.1"},
-  # {:poison, "~> 4.0"},
-  # {:httpoison, "~> 1.8"},
-  # {:google_api_you_tube, "~> 0.40"},
-  {:youtube_organizer, path: Path.join([__DIR__, "youtube_organizer"])}
-])
+Mix.install(
+  [
+    {:kino, "~> 0.9.1"},
+    {:youtube_organizer, path: Path.join([__DIR__, "youtube_organizer"])},
+    {:text_mining, path: Path.join([__DIR__, "text_mining"])}
+  ],
+  config: [nx: [default_backend: EXLA.Backend]]
+)
 ```
 
 ## Section
 
 ```elixir
-auth = YTOrg.AuthWrapper.new("creds.json")
+auth = YTOrg.AuthWrapper.new(Path.join(__DIR__, "creds.json"))
 :ok
 ```
 
@@ -22,17 +23,9 @@ playlists =
   %YTOrg.YoutubePlaylistFetcher{auth: auth}
   |> YTOrg.YoutubePlaylistFetcher.fetch_youtube_playlists()
 
-[%YTOrg.YoutubePlaylist{videos: [vid | _]} | _] = playlists
+[playlist | _] = playlists
+%YTOrg.YoutubePlaylist{videos: [vid | _]} = playlist
 vid
-```
-
-```elixir
-[%YTOrg.YoutubePlaylist{videos: [vid | _]} | _] = playlists
-vid
-```
-
-```elixir
-alias YTOrg.{YoutubePlaylist}
 ```
 
 ```elixir
@@ -61,26 +54,26 @@ defmodule YoutubePlaylistInterface do
     inputs = [playlist_name: playlist_name]
     form = Kino.Control.form(inputs, submit: "Send", report_changes: true)
 
-    form |> Kino.render()
-    frame |> Kino.render()
+    display_initial({form, frame, playlists})
     playlists |> wire_widgets(frame, form)
+
     %YoutubePlaylistInterface{playlists: playlists}
   end
 
   def wire_widgets(playlists, frame, form) do
     playlists_by_name =
-      for %YoutubePlaylist{metadata: meta, videos: videos} <- playlists, into: %{} do
-        {meta.title, videos}
+      for playlist <- playlists, into: %{} do
+        {playlist.metadata.title, playlist}
       end
 
     callback = fn rec ->
       case rec do
         %{data: %{playlist_name: playlist_name}, origin: origin} ->
-          frame
-          |> Kino.Frame.render(
+          playlist_kino =
             playlists_by_name[playlist_name]
-            |> playlist_kino()
-          )
+            |> get_playlist_kino()
+
+          frame |> Kino.Frame.render(playlist_kino)
 
         _ ->
           nil
@@ -90,19 +83,63 @@ defmodule YoutubePlaylistInterface do
     Kino.listen(form, callback)
   end
 
-  def add_markdown_to_frame(frame, markdown_str) do
-    Kino.Frame.append(frame, Kino.Markdown.new(markdown_str))
-  end
+  def get_playlist_kino(playlist) do
+    %YoutubePlaylist{metadata: metadata, videos: videos, representing_video: representing_video} =
+      playlist
 
-  def playlist_kino(videos) do
     images =
       for vid <- videos do
-        image = Kino.Markdown.new("![](#{vid.thumbnails["medium"]["url"]})")
+        image = Kino.Markdown.new("![](#{vid |> get_thumbnail_url()})")
         title_with_link = vid |> get_link_md() |> Kino.Markdown.new()
         Kino.Layout.grid([image, title_with_link], boxed: true)
       end
 
-    Kino.Layout.grid(images, columns: 4)
+    image_grid_layout = Kino.Layout.grid(images, columns: 4)
+    image_grid_layout |> maybe_add_closest_vid_kino(representing_video)
+  end
+
+  def maybe_add_closest_vid_kino(layout, %YTOrg.YoutubeVideo{title: title, url: url}) do
+    closest_vid_kino =
+      "[#{title}](#{url})"
+      |> Kino.Markdown.new()
+
+    Kino.Layout.grid([closest_vid_kino, layout])
+  end
+
+  def maybe_add_closest_vid_kino(layout, nil) do
+    layout
+  end
+
+  defp get_thumbnail_url(%YTOrg.YoutubeVideo{thumbnails: thumbnails}, size \\ "medium") do
+    thumbnails[size]["url"]
+  end
+
+  def display_initial({form, frame, playlists}) do
+    form |> Kino.render()
+    frame |> Kino.render()
+
+    playlists
+    |> get_playlist_info_kino()
+    |> Kino.render()
+  end
+
+  defp playlist_info(playlists) do
+    plist_infos =
+      for plist <- playlists do
+        "#{plist.metadata.title}: #{Enum.count(plist.videos)}"
+      end
+
+    plist_infos |> Enum.join("\n")
+  end
+
+  defp get_playlist_info_kino(playlists) do
+    playlists
+    |> playlist_info()
+    |> Kino.Markdown.new()
+  end
+
+  def add_markdown_to_frame(frame, markdown_str) do
+    Kino.Frame.append(frame, Kino.Markdown.new(markdown_str))
   end
 
   def get_link_md(vid) do
@@ -113,5 +150,136 @@ end
 
 ```elixir
 interface = YoutubePlaylistInterface.new(playlists)
+:ok
+```
+
+```elixir
+defmodule YTOrg.YTTextMining do
+  alias TextMining.{EmbeddingComparator, EmbeddingClusterer, Document}
+
+  @moduledoc """
+  Utils for converting YT data to TextMining package's documents
+  """
+
+  @doc """
+  flatten playlists and return playlists defined by clustering
+  """
+  def get_clustered_playlists(clusterer, playlists, text_field \\ :title) do
+    documents = playlists |> get_documents_from_playlists(text_field)
+    fitted_clusterer = clusterer |> EmbeddingClusterer.fit_clustering(documents, 10)
+
+    clustered_playlist =
+      fitted_clusterer
+      |> EmbeddingClusterer.get_clustered_documents(documents)
+      |> playlists_from_clustering_result()
+
+    {fitted_clusterer, clustered_playlist}
+  end
+
+  def video_to_document(%YTOrg.YoutubeVideo{title: title} = record, :title) do
+    %Document{text: title, id: title, metadata: record}
+  end
+
+  def video_to_document(
+        %YTOrg.YoutubeVideo{title: title, description: description} = record,
+        :description
+      ) do
+    %TextMining.Document{text: description, id: title, metadata: record}
+  end
+
+  def playlists_from_clustering_result(clustered_documents) do
+    for {cluster_id, documents} <- clustered_documents do
+      videos =
+        for doc <- documents do
+          doc.metadata
+        end
+
+      %YoutubePlaylist{
+        metadata: %{id: cluster_id, title: cluster_id},
+        videos: videos
+      }
+    end
+  end
+
+  def flatten_playlists(playlists) do
+    for playlist <- playlists, video <- playlist.videos do
+      video
+    end
+  end
+
+  def get_documents_from_playlists(playlists, text_field) do
+    for video <- flatten_playlists(playlists) do
+      video_to_document(video, text_field)
+    end
+  end
+
+  def add_closest_centroid_videos(clusterer, clustered_playlists, text_field) do
+    clusters = clusterer.model.clusters
+    {n_clusters, _} = clusters.shape
+    embedder = clusterer.text_embedder
+
+    for {playlist, i} <- Enum.with_index(clustered_playlists) do
+      cluster = clusters[i..i]
+      documents = [playlist] |> get_documents_from_playlists(text_field)
+
+      closest_index = embedder |> TextMining.TextEmbedder.get_closest_index(cluster, documents)
+
+      closest_video = documents |> Enum.at(closest_index)
+
+      playlist
+      |> Map.put(:representing_video, closest_video.metadata)
+    end
+  end
+end
+```
+
+```elixir
+alias TextMining.{
+  EmbeddingComparator,
+  EmbeddingClusterer,
+  TextComparator,
+  DocumentCreator,
+  TextClusterer
+}
+
+alias YTOrg.YTTextMining
+
+%TextMining.EmbeddingComparator{text_embedder: embedder} = EmbeddingComparator.new()
+:ok
+```
+
+```elixir
+{title_clusterer, raw_title_clustered_playlists} =
+  EmbeddingClusterer.new(embedder) |> YTTextMining.get_clustered_playlists(playlists)
+
+title_clustered_playlists =
+  title_clusterer
+  |> YTOrg.YTTextMining.add_closest_centroid_videos(raw_title_clustered_playlists, :title)
+
+:ok
+```
+
+### Playlists from title clusters
+
+```elixir
+interface = YoutubePlaylistInterface.new(title_clustered_playlists)
+:ok
+```
+
+### Playlists from title clusters
+
+```elixir
+interface = YoutubePlaylistInterface.new(title_clustered_playlists)
+:ok
+```
+
+```elixir
+clusterer.model
+```
+
+### Playlists from description clusters
+
+```elixir
+interface = YoutubePlaylistInterface.new(description_clustered_playlists)
 :ok
 ```

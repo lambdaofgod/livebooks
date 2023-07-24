@@ -8,5 +8,5 @@ defmodule YTOrg.YoutubeVideo do
 end
 
 defmodule YTOrg.YoutubePlaylist do
-  defstruct [:metadata, :videos]
+  defstruct [:metadata, :videos, :representing_video]
 end

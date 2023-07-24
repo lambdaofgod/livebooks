@@ -7,8 +7,8 @@ defmodule YTOrg.YouTubeClient do
 
   @youtube_api_url "https://www.googleapis.com"
 
-  def fetch_playlist_items(auth_wrapper, playlist_id) do
-    url = "#{@youtube_api_url}/youtube/v3/playlistItems?part=snippet&playlistId=#{playlist_id}"
+  def fetch_playlist_items(auth_wrapper, playlist_id, max_results) do
+    url = "#{@youtube_api_url}/youtube/v3/playlistItems?part=snippet&playlistId=#{playlist_id}&maxResults=#{max_results}"
     headers = [{"Authorization", "Bearer #{auth_wrapper.token}"}]
     {:ok, %{status_code: 200, body: body}} = HTTPoison.get(url, headers)
 

@@ -37,7 +37,7 @@ defimpl TextMining.DocumentCreator, for: TextMining.EmbeddingComparator do
 end
 
 defimpl TextMining.TextComparator, for: TextMining.EmbeddingComparator do
-  alias TextMining.{Document, ComparisonResult, TextEmbedder}
+  alias TextMining.{Document, ComparisonResult, TextEmbedder, DocumentCreator}
 
   def compare_documents(comparator, reference_list, compared_list, n_closest \\ 1) do
     distances = comparator |> get_distances(reference_list, compared_list)
@@ -48,6 +48,13 @@ defimpl TextMining.TextComparator, for: TextMining.EmbeddingComparator do
       distances,
       n_closest
     )
+  end
+
+  def compare_texts(comparator, reference_texts, compared_texts, n_closest) do
+    make_doc = fn text -> DocumentCreator.make_document(comparator, text, nil) end
+    reference_documents = Enum.map(reference_texts, make_doc)
+    compared_documents = Enum.map(compared_texts, make_doc)
+    comparator |> compare_documents(reference_documents, compared_documents, n_closest)
   end
 
   def embed(comparator, documents) do
@@ -65,12 +72,8 @@ defimpl TextMining.TextComparator, for: TextMining.EmbeddingComparator do
     reference_embeddings |> TextEmbedder.get_tensor_distances(compared_embedings)
   end
 
-  defp get_indices_from_distances(distances) do
-    distances |> Nx.argsort(direction: :desc)
-  end
-
   defp get_comparison_results(reference_documents, compared_documents, distances, n_closest \\ 1) do
-    all_indices = distances |> get_indices_from_distances()
+    all_indices = distances |> TextEmbedder.get_indices_from_distances()
 
     {n_reference, _} = all_indices.shape
 
