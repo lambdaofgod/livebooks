@@ -30,6 +30,8 @@ vid
 
 ```elixir
 defmodule YoutubePlaylistInterface do
+  alias YTOrg.YoutubePlaylist
+
   defstruct [:playlists]
 
   def get_playlists_by_name(interface) do
@@ -129,7 +131,7 @@ defmodule YoutubePlaylistInterface do
         "#{plist.metadata.title}: #{Enum.count(plist.videos)}"
       end
 
-    plist_infos |> Enum.join("\n")
+    plist_infos |> Enum.join("\n\n")
   end
 
   defp get_playlist_info_kino(playlists) do
@@ -155,11 +157,11 @@ interface = YoutubePlaylistInterface.new(playlists)
 
 ```elixir
 defmodule YTOrg.YTTextMining do
-  alias TextMining.{EmbeddingComparator, EmbeddingClusterer, Document}
-
   @moduledoc """
   Utils for converting YT data to TextMining package's documents
   """
+  alias TextMining.{EmbeddingComparator, EmbeddingClusterer, Document}
+  alias YTOrg.YoutubePlaylist
 
   @doc """
   flatten playlists and return playlists defined by clustering
@@ -174,6 +176,18 @@ defmodule YTOrg.YTTextMining do
       |> playlists_from_clustering_result()
 
     {fitted_clusterer, clustered_playlist}
+  end
+
+  def get_clustered_playlists(clusterer, playlists, text_field, :add_most_central_videos) do
+    {fitted_clusterer, raw_clustered_playlists} =
+      clusterer
+      |> get_clustered_playlists(playlists, text_field)
+
+    clustered_playlists =
+      fitted_clusterer
+      |> YTOrg.YTTextMining.add_closest_centroid_videos(raw_clustered_playlists, text_field)
+
+    {fitted_clusterer, clustered_playlists}
   end
 
   def video_to_document(%YTOrg.YoutubeVideo{title: title} = record, :title) do
@@ -249,12 +263,9 @@ alias YTOrg.YTTextMining
 ```
 
 ```elixir
-{title_clusterer, raw_title_clustered_playlists} =
-  EmbeddingClusterer.new(embedder) |> YTTextMining.get_clustered_playlists(playlists)
-
-title_clustered_playlists =
-  title_clusterer
-  |> YTOrg.YTTextMining.add_closest_centroid_videos(raw_title_clustered_playlists, :title)
+{title_clusterer, title_clustered_playlists} =
+  EmbeddingClusterer.new(embedder)
+  |> YTTextMining.get_clustered_playlists(playlists, :title, :add_most_central_videos)
 
 :ok
 ```
