@@ -29,8 +29,39 @@ vid
 ```
 
 ```elixir
+defmodule KinoHelpers do
+  def get_link_md(%YTOrg.YoutubeVideo{title: title, url: url}) do
+    "[#{title}](#{url})"
+  end
+
+  def get_link_kino(%YTOrg.YoutubeVideo{} = vid) do
+    vid
+    |> get_link_md()
+    |> Kino.Markdown.new()
+  end
+
+  def get_thumbnail_url(%YTOrg.YoutubeVideo{thumbnails: thumbnails}, size \\ "medium") do
+    thumbnails[size]["url"]
+  end
+
+  def maybe_add_preceding_link_kino(layout, vid = %YTOrg.YoutubeVideo{}) do
+    closest_vid_kino =
+      vid
+      |> get_link_kino()
+
+    Kino.Layout.grid([closest_vid_kino, layout])
+  end
+
+  def maybe_add_preceding_link_kino(layout, nil) do
+    layout
+  end
+end
+```
+
+```elixir
 defmodule YoutubePlaylistInterface do
   alias YTOrg.YoutubePlaylist
+  import KinoHelpers
 
   defstruct [:playlists]
 
@@ -97,23 +128,7 @@ defmodule YoutubePlaylistInterface do
       end
 
     image_grid_layout = Kino.Layout.grid(images, columns: 4)
-    image_grid_layout |> maybe_add_closest_vid_kino(representing_video)
-  end
-
-  def maybe_add_closest_vid_kino(layout, %YTOrg.YoutubeVideo{title: title, url: url}) do
-    closest_vid_kino =
-      "[#{title}](#{url})"
-      |> Kino.Markdown.new()
-
-    Kino.Layout.grid([closest_vid_kino, layout])
-  end
-
-  def maybe_add_closest_vid_kino(layout, nil) do
-    layout
-  end
-
-  defp get_thumbnail_url(%YTOrg.YoutubeVideo{thumbnails: thumbnails}, size \\ "medium") do
-    thumbnails[size]["url"]
+    image_grid_layout |> maybe_add_preceding_link_kino(representing_video)
   end
 
   def display_initial({form, frame, playlists}) do
@@ -142,10 +157,6 @@ defmodule YoutubePlaylistInterface do
 
   def add_markdown_to_frame(frame, markdown_str) do
     Kino.Frame.append(frame, Kino.Markdown.new(markdown_str))
-  end
-
-  def get_link_md(vid) do
-    "[#{vid.title}](#{vid.url})"
   end
 end
 ```
@@ -185,7 +196,7 @@ defmodule YTOrg.YTTextMining do
 
     clustered_playlists =
       fitted_clusterer
-      |> YTOrg.YTTextMining.add_closest_centroid_videos(raw_clustered_playlists, text_field)
+      |> add_closest_centroid_videos(raw_clustered_playlists, text_field)
 
     {fitted_clusterer, clustered_playlists}
   end
@@ -201,7 +212,7 @@ defmodule YTOrg.YTTextMining do
     %TextMining.Document{text: description, id: title, metadata: record}
   end
 
-  def playlists_from_clustering_result(clustered_documents) do
+  defp playlists_from_clustering_result(clustered_documents) do
     for {cluster_id, documents} <- clustered_documents do
       videos =
         for doc <- documents do
@@ -215,19 +226,19 @@ defmodule YTOrg.YTTextMining do
     end
   end
 
-  def flatten_playlists(playlists) do
+  defp flatten_playlists(playlists) do
     for playlist <- playlists, video <- playlist.videos do
       video
     end
   end
 
-  def get_documents_from_playlists(playlists, text_field) do
+  defp get_documents_from_playlists(playlists, text_field) do
     for video <- flatten_playlists(playlists) do
       video_to_document(video, text_field)
     end
   end
 
-  def add_closest_centroid_videos(clusterer, clustered_playlists, text_field) do
+  defp add_closest_centroid_videos(clusterer, clustered_playlists, text_field) do
     clusters = clusterer.model.clusters
     {n_clusters, _} = clusters.shape
     embedder = clusterer.text_embedder
