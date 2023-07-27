@@ -1,0 +1,74 @@
+# Exploring Huggingface model metadata
+
+```elixir
+Mix.install(
+  [
+    {:kino, "~> 0.9.1"},
+    {:kino_bumblebee, "~> 0.3.0"},
+    {:bumblebee, "~> 0.3.0"},
+    {:poison, "~> 4.0"},
+    {:httpoison, "~> 1.8"},
+    {:exla, ">= 0.0.0"}
+  ],
+  config: [nx: [default_backend: EXLA.Backend]]
+)
+```
+
+## Section
+
+```elixir
+defmodule HuggingfaceChecker do
+  def get_hf_url(repo_name, file_path) do
+    repo_url = "https://huggingface.co/" |> Path.join(repo_name)
+    file_suffix_url = "/resolve/main/" |> Path.join(file_path)
+    repo_url |> Path.join(file_suffix_url)
+  end
+
+  def get_file_contents(repo, file_path) do
+    {:ok, %HTTPoison.Response{body: body}} =
+      HuggingfaceChecker.get_url(repo, file_path)
+      |> HTTPoison.get()
+
+    body |> Poison.decode!()
+  end
+
+  def compare_files(repository, other_repository, path) do
+    repository_dict = get_file_contents(repository, path)
+    other_repository_dict = get_file_contents(other_repository, path)
+    compare_dicts(repository_dict, other_repository_dict)
+  end
+
+  def remove_equal_results(comparison_dict) do
+    comparison_dict
+    |> Enum.filter(fn {_, v} -> v |> Map.get(:both) == nil end)
+  end
+
+  defp compare_dicts(d1, d2) do
+    all_keys = Map.keys(d1) ++ Map.keys(d2)
+
+    for key <- all_keys, into: %{} do
+      result = deduplicate_if_different(d1 |> Map.get(key), d2 |> Map.get(key))
+      {key, result}
+    end
+  end
+
+  defp deduplicate_if_different(nil, y), do: %{right: y}
+  defp deduplicate_if_different(x, nil), do: %{left: x}
+  defp deduplicate_if_different(x, y) when x == y, do: %{both: x}
+  defp deduplicate_if_different(x, y), do: %{left: x, right: y}
+end
+```
+
+```elixir
+repo = "stabilityai/stable-diffusion-xl-base-1.0"
+older_repo = "CompVis/stable-diffusion-v1-4"
+
+file_path =
+  HuggingfaceChecker.compare_files(repo, older_repo, "vae/config.json")
+  |> HuggingfaceChecker.remove_equal_results()
+```
+
+```elixir
+HuggingfaceChecker.compare_files(repo, older_repo, "unet/config.json")
+|> HuggingfaceChecker.remove_equal_results()
+```
