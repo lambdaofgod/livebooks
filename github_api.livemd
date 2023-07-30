@@ -15,5 +15,11 @@ client = Tentacat.Client.new()
 ```
 
 ```elixir
-{200, data, _response} = Tentacat.Users.find("lambdaofgod")
+{200, data, _response} =
+  client
+  |> Tentacat.Search.repositories(%{q: "code language:elixir"})
+```
+
+```elixir
+Enum.count(data)
 ```
