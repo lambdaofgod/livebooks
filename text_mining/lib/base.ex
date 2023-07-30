@@ -1,5 +1,6 @@
 defprotocol TextMining.TextComparator do
   alias TextMining.Document
+
   @moduledoc """
   Comparing texts using embeddings.
 
@@ -31,7 +32,6 @@ defprotocol TextMining.DocumentCreator do
 end
 
 defprotocol TextMining.TextClusterer do
-  #@spec get_clustering_result(any(), [Document.t()], Integer.t) :: Map.t()
   def fit_clustering(clusterer, documents, n_clusters)
   def get_closest_cluster(clusterer, document, clusters)
   def get_closest_document(clusterer, cluster, documents)

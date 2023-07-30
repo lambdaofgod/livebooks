@@ -13,7 +13,13 @@ Mix.install(
 ## Section
 
 ```elixir
-alias TextMining.{EmbeddingComparator, TextComparator, DocumentCreator}
+alias TextMining.{
+  EmbeddingComparator,
+  EmbeddingClusterer,
+  TextComparator,
+  DocumentCreator,
+  TextClusterer
+}
 
 text_comparator = EmbeddingComparator.new()
 
@@ -33,15 +39,12 @@ comparison_results =
 ```
 
 ```elixir
-alias TextMining.TextClusterer
-```
+clusterer = EmbeddingClusterer.new(text_comparator.text_embedder)
 
-```elixir
-&TextClusterer.get_document_clusters/3
-```
-
-```elixir
-{centroids, document_clusters} = text_comparator |> TextClusterer.get_clustering(documents, 2)
+document_clusters =
+  clusterer
+  |> EmbeddingClusterer.fit_clustering(documents, 2)
+  |> EmbeddingClusterer.get_clustered_documents(documents)
 ```
 
 ```elixir
