@@ -1,0 +1,19 @@
+# Github API
+
+```elixir
+Mix.install([
+  {:poison, "~> 4.0"},
+  {:httpoison, "~> 1.8"},
+  {:tentacat, "~> 2.0"}
+])
+```
+
+## Section
+
+```elixir
+client = Tentacat.Client.new()
+```
+
+```elixir
+{200, data, _response} = Tentacat.Users.find("lambdaofgod")
+```

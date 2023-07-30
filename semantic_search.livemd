@@ -1,0 +1,19 @@
+# Semantic search
+
+```elixir
+Mix.install([
+  {:qdrant, git: "https://github.com/marinac-dev/qdrant.git"},
+  {:text_mining, path: Path.join([__DIR__, "text_mining"])}
+])
+```
+
+## Section
+
+```elixir
+alias TextMining.EmbeddingComparator
+embedding_comparator = EmbeddingComparator.new()
+```
+
+```elixir
+embedding_comparator
+```
