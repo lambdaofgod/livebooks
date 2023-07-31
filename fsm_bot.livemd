@@ -1,0 +1,61 @@
+# Elixir FSM Bot
+
+```elixir
+Mix.install([
+  {:poison, "~> 4.0"},
+  {:httpoison, "~> 1.8"},
+  {:fsmx, "~> 0.2.0"}
+])
+```
+
+## Section
+
+```elixir
+defmodule App.StateMachine do
+  defstruct [:state, :utterances, :inputs]
+
+  def new() do
+    %App.StateMachine{state: "enter", utterances: [], inputs: []}
+  end
+
+  use Fsmx.Struct,
+    transitions: %{
+      "enter" => ["ask_first"],
+      "ask_first" => ["ask_more", "continue_first"],
+      "ask_more" => ["ask_more", "continue_first"],
+      "continue_first" => "end",
+      # can transition to any state
+      "four" => :*,
+      # can transition from any state to "five"
+      "*" => ["five"]
+    }
+
+  def before_transition(struct, "enter", state) do
+    struct |> append_inputs(state, "What do you want to tell me?")
+  end
+
+  def before_transition(struct, "ask_more", state) do
+    struct |> append_inputs(state, "Is there something more?")
+  end
+
+  def append_inputs(struct, new_state, text) do
+    %App.StateMachine{struct | state: new_state, inputs: [text | struct.utterances]}
+  end
+end
+
+alias App.StateMachine
+```
+
+```elixir
+sm = StateMachine.new()
+```
+
+```elixir
+sm |> Fsmx.transition("ask_first")
+```
+
+```elixir
+sm
+|> Fsmx.transition("ask_first")
+|> Fsmx.transition("")
+```
