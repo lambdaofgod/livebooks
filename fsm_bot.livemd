@@ -11,39 +11,111 @@ Mix.install([
 ## Section
 
 ```elixir
-defmodule App.StateMachine do
+defmodule FSMBot.States do
+  @transitions %{
+    :enter => [:ask_first],
+    :ask_first => [:ask_more, :continue_first],
+    :ask_more => [:ask_more, :continue_first],
+    :continue_first => :end,
+    # can transition to any state
+    :four => :*,
+    # can transition from any state to "five"
+    :* => [:five]
+  }
+end
+```
+
+```elixir
+defmodule FSMBot.NLU do
+  defstruct []
+
+  def run_nlu(_, :enter, text) do
+    {:ask_first, [text]}
+  end
+
+  def run_nlu(_, :ask_more, text) do
+    next_state =
+      case text do
+        "nie" -> :continue_first
+        true -> :ask_more
+      end
+
+    {next_state, [text]}
+  end
+
+  def run_nlu(_, :ask_first, text) do
+    {:ask_more, [text]}
+  end
+end
+```
+
+```elixir
+defmodule FSMBot.ResponseSelector do
+  def responses() do
+    %{
+      :ask_first => "How can I help you?",
+      :ask_more => "Is there anything else?",
+      :continue_first => "What else?",
+      :continue_first => "Ok, another question"
+    }
+  end
+end
+```
+
+```elixir
+defmodule FSMBot.StateMachine do
   defstruct [:state, :utterances, :inputs]
 
   def new() do
-    %App.StateMachine{state: "enter", utterances: [], inputs: []}
+    %FSMBot.StateMachine{state: :enter, utterances: [], inputs: []}
   end
 
   use Fsmx.Struct,
     transitions: %{
-      "enter" => ["ask_first"],
-      "ask_first" => ["ask_more", "continue_first"],
-      "ask_more" => ["ask_more", "continue_first"],
-      "continue_first" => "end",
+      :enter => [:ask_first],
+      :ask_first => [:ask_more, :continue_first],
+      :ask_more => [:ask_more, :continue_first],
+      :continue_first => :end,
       # can transition to any state
-      "four" => :*,
+      :four => :*,
       # can transition from any state to "five"
-      "*" => ["five"]
+      :* => [:five]
     }
 
-  def before_transition(struct, "enter", state) do
-    struct |> append_inputs(state, "What do you want to tell me?")
+  def update_inputs(struct, texts) do
+    %FSMBot.StateMachine{struct | inputs: texts ++ struct.inputs}
   end
 
-  def before_transition(struct, "ask_more", state) do
-    struct |> append_inputs(state, "Is there something more?")
-  end
-
-  def append_inputs(struct, new_state, text) do
-    %App.StateMachine{struct | state: new_state, inputs: [text | struct.utterances]}
+  def update_utterances(struct, texts) do
+    %FSMBot.StateMachine{struct | utterances: texts ++ struct.utterances}
   end
 end
 
-alias App.StateMachine
+alias FSMBot.StateMachine
+
+defmodule FSMBot.StateMachineRunner do
+  defstruct [:nlu]
+
+  def new() do
+    %FSMBot.StateMachineRunner{nlu: %FSMBot.NLU{}}
+  end
+
+  def transition_bot(struct, runner, text) do
+    IO.puts(struct.state)
+    {next_state, stored_text} = FSMBot.NLU.run_nlu(runner.nlu, struct.state, text)
+    response = FSMBot.ResponseSelector.responses() |> Map.get(next_state)
+
+    {:ok, new_struct} =
+      struct
+      |> StateMachine.update_inputs(stored_text)
+      |> StateMachine.update_utterances([response])
+      |> Fsmx.transition(next_state)
+
+    new_struct
+  end
+end
+
+alias FSMBot.StateMachineRunner
 ```
 
 ```elixir
@@ -51,11 +123,16 @@ sm = StateMachine.new()
 ```
 
 ```elixir
-sm |> Fsmx.transition("ask_first")
+runner = FSMBot.StateMachineRunner.new()
 ```
 
 ```elixir
-sm
-|> Fsmx.transition("ask_first")
-|> Fsmx.transition("")
+state =
+  sm
+  |> StateMachineRunner.transition_bot(runner, "Hi")
+  |> StateMachineRunner.transition_bot(runner, "I'm ok")
+```
+
+```elixir
+state |> Fsmx.transition(:ask_first)
 ```
