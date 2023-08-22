@@ -1,0 +1,43 @@
+# Mermaid
+
+## Section
+
+Terminology
+
+We will use *search metrics* and *information retrieval* metrics interchangeably.
+
+<!-- livebook:{"break_markdown":true} -->
+
+```mermaid
+stateDiagram-v2
+    state "Document expansion" as Exp
+    state "Evaluation (generation metrics)" as GenEval
+    state "Feature extraction" as Features
+    state "Evaluation (information retrieval)" as IREval
+    state "Comparison" as Comp
+    Preprocessing --> Exp
+    Exp --> GenEval
+    Exp --> Features
+    Features --> IREval
+    IREval --> Comp
+    GenEval --> Comp
+```
+
+Because we expand documents using language models which are naturally nondeterministic, we repeat document expansion step Nx times. The metrics are then averaged over generations.
+
+Note: generation metrics are calculated *per document* and information retrieval metrics are calculated *per query*
+
+<!-- livebook:{"break_markdown":true} -->
+
+```mermaid
+stateDiagram-v2
+    state "Paperswithcode data" as LoadPWC
+    state "Github data" as LoadGithub
+    state "Code extraction" as LoadCode
+    state "Dependency extraction" as LoadGraph
+    state "Merging PapersWithcode and Github data" as Merge
+    LoadPWC --> Merge
+    LoadGithub --> LoadCode
+    LoadCode --> LoadGraph
+    LoadGraph --> Merge
+```
