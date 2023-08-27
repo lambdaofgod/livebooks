@@ -1,0 +1,175 @@
+# Hopfield nets
+
+```elixir
+Mix.install([
+  {:axon, "~> 0.6.0"},
+  {:nx, "~> 0.5"},
+  {:exla, "~> 0.5"},
+  {:image, "~> 0.28.0"},
+  {:kino, "~> 0.10.0"},
+  {:req, "~> 0.3.1"}
+])
+```
+
+## Hopfield Network
+
+```elixir
+EXLA.Backend
+```
+
+## MNIST
+
+```elixir
+defmodule MNISTLoader do
+  @base_url "https://storage.googleapis.com/cvdf-datasets/mnist/"
+
+  def get_images(:train) do
+    %{body: train_images} = Req.get!(@base_url <> "train-images-idx3-ubyte.gz")
+    %{body: train_labels} = Req.get!(@base_url <> "train-labels-idx1-ubyte.gz")
+
+    <<_::32, n_images::32, n_rows::32, n_cols::32, raw_images::binary>> = train_images
+    <<_::32, n_labels::32, raw_labels::binary>> = train_labels
+
+    images =
+      raw_images
+      |> Nx.from_binary({:u, 8})
+      |> Nx.reshape({n_images, 1, n_rows, n_cols}, names: [:images, :channels, :height, :width])
+      |> Nx.divide(255)
+
+    images = Nx.to_batched(images, 32)
+
+    targets =
+      raw_labels
+      |> Nx.from_binary({:u, 8})
+      |> Nx.new_axis(-1)
+      |> Nx.equal(Nx.tensor(Enum.to_list(0..9)))
+      |> Nx.to_batched(32)
+
+    {images, targets}
+  end
+end
+
+{train_images, train_labels} = MNISTLoader.get_images(:train)
+```
+
+```elixir
+defprotocol HopfieldNetwork do
+  @spec memorize(any(), Nx.Tensor.t()) :: __MODULE__.t()
+  def memorize(net_type, stored_vectors)
+
+  def energy(net, vectors)
+
+  @spec remember(__MODULE__.t(), Nx.Tensor.t(), Integer.t()) :: Nx.Tensor.t()
+  def remember(net, vectors, steps)
+end
+
+defmodule SimpleHopfieldNetwork do
+  @moduledoc """
+  classical hopfield network
+  """
+  defstruct [:weights]
+end
+
+defimpl HopfieldNetwork, for: SimpleHopfieldNetwork do
+  import Nx.Defn
+
+  def memorize(%SimpleHopfieldNetwork{}, stored_vectors) do
+    weights = stored_vectors |> Nx.transpose() |> Nx.dot(stored_vectors)
+    %SimpleHopfieldNetwork{weights: weights}
+  end
+
+  def remember(%SimpleHopfieldNetwork{weights: weights}, vectors, steps \\ 10) do
+    remembered_vectors = vectors
+
+    for _ <- 1..steps do
+      remembered_vectors = remember_step(weights, remembered_vectors)
+    end
+
+    remembered_vectors
+  end
+
+  defn remember_step(weights, vectors) do
+    Nx.sign(vectors |> Nx.dot(weights))
+  end
+end
+```
+
+```elixir
+example_images = train_images |> Stream.take(1) |> Enum.map(fn x -> x end) |> List.first()
+examples = example_images |> Nx.reshape({32, 28 * 28}) |> Nx.multiply(2) |> Nx.subtract(1)
+```
+
+```elixir
+simple_hopfield_net = %SimpleHopfieldNetwork{} |> HopfieldNetwork.memorize(examples)
+```
+
+```elixir
+{simple_hopfield_net.weights.shape, examples.shape}
+```
+
+```elixir
+remembered_examples = simple_hopfield_net |> HopfieldNetwork.remember(examples, 10)
+```
+
+```elixir
+remembered_examples |> Nx.subtract(examples) |> Nx.mean(axes: [1])
+```
+
+```elixir
+differences = remembered_examples |> Nx.subtract(examples)
+```
+
+```elixir
+differences |> Nx.abs() |> Nx.mean(axes: [1])
+```
+
+```elixir
+simple_hopfield_net.weights |> Nx.take_diagonal()
+```
+
+```elixir
+example_images
+```
+
+```elixir
+defmodule ImageOps do
+  def to_sign_binary(tensor) do
+    tensor |> Nx.multiply(2) |> Nx.subtract(1)
+  end
+
+  def to_binary_from_sign(tensor) do
+    tensor |> Nx.add(1) |> Nx.divide(2)
+  end
+
+  def flatten_images(images) do
+    {n_images, dimension} =
+      case images.shape do
+        {n, a, b, c} -> {n, a * b * c}
+        {n, a, b} -> {n, a * b}
+      end
+
+    images |> Nx.reshape({n_images, dimension})
+  end
+
+  def to_images(vectors, size \\ {28, 28, 1}) do
+    {n_vectors, _} = vectors |> Nx.shape()
+
+    output_shape =
+      ([n_vectors] ++ Tuple.to_list(size))
+      |> List.to_tuple()
+
+    Nx.as_type(vectors |> Nx.multiply(256), {:u, 8})
+    |> Nx.reshape(output_shape)
+  end
+end
+```
+
+```elixir
+img_tensors = ImageOps.to_images(remembered_examples[0..1])
+```
+
+```elixir
+img = Kino.Image.new(img_tensors[0])
+```
+
+## Section
