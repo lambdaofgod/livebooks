@@ -32,6 +32,22 @@ defmodule Goodreads.UserFinder do
     |> make_goodreads_user_url()
   end
 
+  def get_user_reviews_url(username: username) do
+    username |> find_user_url() |> make_user_url_to_reviews_url()
+  end
+
+  def get_user_reviews_url(url: url) do
+    url |> make_user_url_to_reviews_url()
+  end
+
+  def get_reviews(args) do
+    url = get_user_reviews_url(args)
+    %{body: html} = url |> HTTPoison.get!()
+
+    html
+    |> Floki.parse_document!()
+  end
+
   defp extract_user_url_suffix(document) do
     [{"a", [{"href", user_url_suffix}], _} | _] =
       document |> Floki.find("table") |> Floki.find("a")
@@ -41,14 +57,6 @@ defmodule Goodreads.UserFinder do
 
   defp make_goodreads_user_url(user_url_suffix) do
     "https://www.goodreads.com/" |> Path.join(user_url_suffix)
-  end
-
-  def get_user_reviews_url(username: username) do
-    username |> find_user_url() |> make_user_url_to_reviews_url()
-  end
-
-  def get_user_reviews_url(url: url) do
-    url |> make_user_url_to_reviews_url()
   end
 
   defp make_user_url_to_reviews_url(url) do
@@ -64,8 +72,11 @@ Goodreads.UserFinder.find_user_url("bartczukkuba")
 ```
 
 ```elixir
-defmodule Twitter.FollowFinder do
-end
+user_reviews_doc = Goodreads.UserFinder.get_reviews(username: "bartczukkuba")
+```
+
+```elixir
+user_reviews_doc
 ```
 
 ```elixir
