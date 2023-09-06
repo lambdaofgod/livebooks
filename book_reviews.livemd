@@ -7,7 +7,8 @@ Mix.install(
     {:httpoison, "~> 1.8"},
     {:floki, "~> 0.34.0"},
     {:oauther, "~> 1.1"},
-    {:extwitter, "~> 0.12"}
+    {:extwitter, "~> 0.12"},
+    {:wallaby, "~> 0.30.6"}
   ],
   config: [
     extwitter: [json_library: Poison]
@@ -76,7 +77,27 @@ user_reviews_doc = Goodreads.UserFinder.get_reviews(username: "bartczukkuba")
 ```
 
 ```elixir
-user_reviews_doc
+ExUnit.start()
+
+defmodule Check do
+  use ExUnit.Case, async: true
+  use Wallaby.Feature
+
+  import Wallaby.Query, only: [css: 2, text_field: 1, button: 1]
+
+  feature "users can create todos", %{session: session} do
+    session
+    |> visit("https://www.goodreads.com/review/list/14118501")
+    |> find(css(".field review", count: 1))
+    |> List.first()
+    |> inspect()
+    |> IO.puts()
+  end
+end
+```
+
+```elixir
+
 ```
 
 ```elixir
