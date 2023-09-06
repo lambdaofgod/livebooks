@@ -1,0 +1,81 @@
+# Goodreads
+
+```elixir
+Mix.install(
+  [
+    {:poison, "~> 4.0"},
+    {:httpoison, "~> 1.8"},
+    {:floki, "~> 0.34.0"},
+    {:oauther, "~> 1.1"},
+    {:extwitter, "~> 0.12"}
+  ],
+  config: [
+    extwitter: [json_library: Poison]
+  ]
+)
+```
+
+## Section
+
+```elixir
+defmodule Goodreads.UserFinder do
+  def find_user_url(username) do
+    sanitized_username = username |> URI.encode()
+
+    url =
+      "https://www.goodreads.com/search?q=#{sanitized_username}&search%5Bsource%5D=goodreads&search_type=people&tab=people"
+
+    %{body: html} = HTTPoison.get!(url)
+
+    Floki.parse_document!(html)
+    |> extract_user_url_suffix()
+    |> make_goodreads_user_url()
+  end
+
+  defp extract_user_url_suffix(document) do
+    [{"a", [{"href", user_url_suffix}], _} | _] =
+      document |> Floki.find("table") |> Floki.find("a")
+
+    user_url_suffix
+  end
+
+  defp make_goodreads_user_url(user_url_suffix) do
+    "https://www.goodreads.com/" |> Path.join(user_url_suffix)
+  end
+
+  def get_user_reviews_url(username: username) do
+    username |> find_user_url() |> make_user_url_to_reviews_url()
+  end
+
+  def get_user_reviews_url(url: url) do
+    url |> make_user_url_to_reviews_url()
+  end
+
+  defp make_user_url_to_reviews_url(url) do
+    url
+    |> String.replace(
+      "https://www.goodreads.com/user/show/",
+      "https://www.goodreads.com/review/list/"
+    )
+  end
+end
+
+Goodreads.UserFinder.find_user_url("bartczukkuba")
+```
+
+```elixir
+defmodule Twitter.FollowFinder do
+end
+```
+
+```elixir
+Goodreads.UserFinder.get_user_reviews_url(username: "bartczukkuba")
+```
+
+```elixir
+HTTPoison.get!("https://twitter.com/lambdaofgod/following")
+```
+
+```elixir
+user_url_suffix
+```
