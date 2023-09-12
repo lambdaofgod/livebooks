@@ -4,24 +4,357 @@
 Mix.install([
   {:poison, "~> 4.0"},
   {:httpoison, "~> 1.8"},
-  {:fsmx, "~> 0.2.0"}
+  {:ash_state_machine, "~> 0.2.1"}
 ])
 ```
 
 ## Section
 
 ```elixir
-defmodule FSMBot.States do
-  @transitions %{
-    :enter => [:ask_first],
-    :ask_first => [:ask_more, :continue_first],
-    :ask_more => [:ask_more, :continue_first],
-    :continue_first => :end,
-    # can transition to any state
-    :four => :*,
-    # can transition from any state to "five"
-    :* => [:five]
+defmodule Order do
+  # leaving out data layer configuration for brevity
+  use Ash.Resource,
+    extensions: [AshStateMachine]
+
+  state_machine do
+    initial_states([:pending])
+    default_initial_state(:pending)
+
+    transitions do
+      transition(:confirm, from: :pending, to: :confirmed)
+      transition(:begin_delivery, from: :confirmed, to: :on_its_way)
+      transition(:package_arrived, from: :on_its_way, to: :arrived)
+      transition(:error, from: [:pending, :confirmed, :on_its_way], to: :error)
+    end
+  end
+
+  actions do
+    # create sets the state
+    defaults([:create, :read, :update])
+
+    update :confirm do
+      # accept [...] 
+      # you can change other attributes
+      # or do anything else an action can normally do
+      # this transition will be validated according to
+      # the state machine rules above
+      change(transition_state(:confirmed))
+    end
+
+    update :begin_delivery do
+      # accept [...]
+      change(transition_state(:on_its_way))
+    end
+
+    update :package_arrived do
+      # accept [...]
+      change(transition_state(:arrived))
+    end
+
+    update :error do
+      accept([:error_state, :error])
+      change(transition_state(:error))
+    end
+
+    update :add_details do
+      accept([:text])
+      change(set_attribute(:text, expr(^arg(:text))))
+    end
+  end
+
+  changes do
+    # any failures should be captured and transitioned to the error state
+    change(
+      after_transaction(fn
+        changeset, {:ok, result} ->
+          "result" |> IO.puts()
+          result |> inspect() |> IO.puts()
+          {:ok, result}
+
+        changeset, {:error, error} ->
+          message = Exception.message(error)
+
+          changeset.data
+          |> Ash.Changeset.for_update(:error, %{
+            message: message,
+            error_state: changeset.data.state
+          })
+          |> Api.update()
+      end),
+      on: [:update]
+    )
+  end
+
+  attributes do
+    uuid_primary_key(:id)
+    # ...attributes like address/delivery options would go here
+    attribute(:error, :string)
+    attribute(:error_state, :string)
+    attribute(:text, :string)
+    # :state attribute is added for you by `state_machine`
+    # however, you can add it yourself, and you will be guided by
+    # compile errors on what states need to be allowed by your type.
+  end
+
+  code_interface do
+    define_for(Order.Api)
+
+    define(:create)
+    define(:confirm)
+    define(:begin_delivery)
+    define(:package_arrived)
+    define(:update)
+    define(:add_details, action: :add_details, args: [:text])
+  end
+
+  defmodule Api do
+    use Ash.Api
+
+    resources do
+      allow_unregistered?(true)
+    end
+  end
+end
+```
+
+```elixir
+
+```
+
+```elixir
+order = Order.create!() |> Order.confirm!()
+```
+
+```elixir
+order_with_text = order |> Order.update!(%{text: "foo"})
+```
+
+```elixir
+{:ok, cset} = Ash.Changeset.new(Order, %{text: "foo"}) |> Ash.Changeset.apply_attributes()
+```
+
+```elixir
+order
+```
+
+```elixir
+
+```
+
+```elixir
+order_with_text
+```
+
+```elixir
+Order.add_details(order, "foo")
+```
+
+```elixir
+
+```
+
+```elixir
+defmodule AshFunctionStateMachine do
+  defmodule Transition do
+    @moduledoc """
+    The configuration for an transition.
+    """
+    @type t :: %__MODULE__{
+            action: atom,
+            from: [atom],
+            to: [atom],
+            __identifier__: any
+          }
+
+    defstruct [:action, :from, :to, :__identifier__]
+  end
+
+  require Logger
+
+  @transition %Spark.Dsl.Entity{
+    name: :transition,
+    target: Transition,
+    args: [:action],
+    identifier: {:auto, :unique_integer},
+    schema: [
+      action: [
+        type: :atom,
+        doc:
+          "The corresponding action that is invoked for the transition. Use `:*` to allow any update action to perform this transition."
+      ],
+      from: [
+        type: {:or, [{:list, :atom}, :atom]},
+        required: true,
+        doc:
+          "The states in which this action may be called. If not specified, then any state is accepted. Use `:*` to refer to all states."
+      ],
+      to: [
+        type: {:or, [{:list, :atom}, :atom]},
+        required: true,
+        doc:
+          "The states that this action may move to. If not specified, then any state is accepted. Use `:*` to refer to all states."
+      ]
+    ]
   }
+
+  @transitions %Spark.Dsl.Section{
+    name: :transitions,
+    entities: [
+      @transition
+    ]
+  }
+
+  @state_machine %Spark.Dsl.Section{
+    name: :state_machine,
+    schema: [
+      deprecated_states: [
+        type: {:list, :atom},
+        default: [],
+        doc: """
+        A list of states that have been deprecated.
+        The list of states is derived from the transitions normally.
+        Use this option to express that certain types should still
+        be included in the derived state list even though no transitions
+        go to/from that state anymore. `:*` transitions will not include
+        these states.
+        """
+      ],
+      extra_states: [
+        type: {:list, :atom},
+        default: [],
+        doc: """
+        A list of states that may be used by transitions to/from `:*`
+        The list of states is derived from the transitions normally.
+        Use this option to express that certain types should still
+        be included even though no transitions go to/from that state anymore.
+        `:*` transitions will include these states.
+        """
+      ],
+      state_attribute: [
+        type: :atom,
+        doc: "The attribute to store the state in.",
+        default: :state
+      ],
+      initial_states: [
+        type: {:list, :atom},
+        required: true,
+        doc: "The allowed starting states of this state machine."
+      ],
+      default_initial_state: [
+        type: :atom,
+        doc: "The default initial state"
+      ]
+    ],
+    sections: [
+      @transitions
+    ]
+  }
+
+  @sections [@state_machine]
+
+  @moduledoc """
+  Functions for working with AshStateMachine.
+  <!--- ash-hq-hide-start --> <!--- -->
+
+  ## DSL Documentation
+
+  ### Index
+
+  #{Spark.Dsl.Extension.doc_index(@sections)}
+
+  ### Docs
+
+  #{Spark.Dsl.Extension.doc(@sections)}
+  <!--- ash-hq-hide-stop --> <!--- -->
+  """
+
+  use Spark.Dsl.Extension,
+    sections: @sections,
+    transformers: [
+      AshStateMachine.Transformers.FillInTransitionDefaults,
+      AshStateMachine.Transformers.AddState,
+      AshStateMachine.Transformers.EnsureStateSelected
+    ],
+    verifiers: [
+      AshStateMachine.Verifiers.VerifyTransitionActions,
+      AshStateMachine.Verifiers.VerifyDefaultInitialState
+    ],
+    imports: [
+      AshStateMachine.BuiltinChanges
+    ]
+
+  @doc """
+  A utility to transition the state of a changeset, honoring the rules of the resource.
+  """
+  def transition_state(%{action_type: :update} = changeset, target) do
+    transitions =
+      AshStateMachine.Info.state_machine_transitions(changeset.resource, changeset.action.name)
+
+    attribute = AshStateMachine.Info.state_machine_state_attribute!(changeset.resource)
+    old_state = Map.get(changeset.data, attribute)
+
+    if target in AshStateMachine.Info.state_machine_all_states(changeset.resource) do
+      case Enum.find(transitions, fn transition ->
+             old_state in List.wrap(transition.from) and target in List.wrap(transition.to)
+           end) do
+        nil ->
+          Ash.Changeset.add_error(
+            changeset,
+            AshStateMachine.Errors.NoMatchingTransition.exception(
+              old_state: old_state,
+              target: target,
+              action: changeset.action.name
+            )
+          )
+
+        _transition ->
+          Ash.Changeset.force_change_attribute(changeset, attribute, target)
+      end
+    else
+      Logger.error("""
+      Attempted to transition to an unknown state.
+
+      This usually means that one of the following is true:
+
+      * You have a missing transition definition in your state machine
+
+        To remediate this, add a transition.
+
+      * You are using `:*` to include a state that appears nowhere in the state machine definition
+
+        To remediate this, add the `extra_states` option and include the state #{inspect(target)}
+      """)
+
+      Ash.Changeset.add_error(
+        changeset,
+        AshStateMachine.Errors.NoMatchingTransition.exception(
+          old_state: old_state,
+          target: target,
+          action: changeset.action.name
+        )
+      )
+    end
+  end
+
+  def transition_state(%{action_type: :create} = changeset, target) do
+    attribute = AshStateMachine.Info.state_machine_state_attribute!(changeset.resource)
+
+    if target in AshStateMachine.Info.state_machine_initial_states!(changeset.resource) do
+      Ash.Changeset.force_change_attribute(changeset, attribute, target)
+    else
+      Ash.Changeset.add_error(
+        changeset,
+        AshStateMachine.Errors.InvalidInitialState.exception(
+          target: target,
+          action: changeset.action.name
+        )
+      )
+    end
+  end
+
+  def transition_state(other, _target) do
+    Ash.Changeset.add_error(other, "Can't transition states on destroy actions")
+  end
 end
 ```
 
