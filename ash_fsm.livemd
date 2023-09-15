@@ -1,0 +1,215 @@
+# Ash FSM
+
+```elixir
+Mix.install([
+  {:kino, "~> 0.10.0"},
+  {:poison, "~> 4.0"},
+  {:httpoison, "~> 1.8"},
+  {:ash_state_machine, "~> 0.2.1"},
+  {:uuid, "~> 1.1.8"}
+])
+```
+
+## Section
+
+```elixir
+Ash.Resource.Change.Builtins.set_attribute(:text, "foo")
+```
+
+```elixir
+defmodule GreetChange do
+  use Ash.Resource.Change
+
+  def change(changeset, opts, _) do
+    AshStateMachine.transition_state(changeset, opts[:target])
+  end
+end
+```
+
+```elixir
+defmodule ConversationState do
+  # leaving out data layer configuration for brevity
+  use Ash.Resource,
+    extensions: [AshStateMachine],
+    validate_api_inclusion?: false
+
+  attributes do
+    uuid_primary_key(:id)
+    # ...attributes like address/delivery options would go here
+    attribute(:error, :string)
+    attribute(:error_state, :string)
+    attribute(:response, :string)
+    attribute(:text, :string)
+
+    attribute :nlu_type, :atom do
+      constraints(one_of: [:dummy])
+    end
+
+    # :state attribute is added for you by `state_machine`
+    # however, you can add it yourself, and you will be guided by
+    # compile errors on what states need to be allowed by your type.
+  end
+
+  state_machine do
+    initial_states([:start])
+    default_initial_state(:start)
+
+    transitions do
+      transition(:greet, from: :start, to: :table_question)
+      transition(:get_table, from: [:table_question], to: :raw_table_state)
+      transition(:start_time_filling, from: [:raw_table_state, :time_filling], to: :time_filling)
+      transition(:fill_symptom_time, from: :time_filling, to: :time_filling)
+      transition(:return_time_filled_table, from: :time_filling, to: :table_with_time_state)
+      transition(:ask_followup_question, from: :table_with_time_state, to: :followup)
+      transition(:proceed_followup, from: :followup, to: :table_question)
+      transition(:proceed_no_followup, from: :followup, to: :summary)
+      transition(:summarize, from: :summary, to: :end)
+      transition(:finish_conversation, from: :listen, to: :end)
+      # transition(:fallback, from: [:first_question], to: :first_question)
+      # transition(:error, from: [:pending, :confirmed, :on_its_way], to: :error)
+    end
+  end
+
+  actions do
+    defaults([:create, :read, :update])
+
+    update :greet do
+      change(transition_state(:greeting))
+    end
+
+    update :get_table do
+      # setting the NLU type 
+      change(set_attribute(:nlu_type, :trivial))
+      change(transition_state(:listen))
+    end
+
+    update :start_time_filling do
+      # accept [...]
+      change(transition_state(:normalized_table))
+    end
+
+    update :fill_symptom_time do
+      # accept [...]
+      change(transition_state(:setting_time))
+    end
+
+    update :return_time_filled_table do
+      # accept [...]
+      change(transition_state(:setting_time))
+    end
+
+    update :ask_followup_question do
+      # accept [...]
+      change(transition_state(:table_with_time))
+    end
+
+    update :proceed_followup do
+      # accept [...]
+      change(transition_state(:followup))
+    end
+
+    update :proceed_no_followup do
+      # accept [...]
+      change(transition_state(:followup))
+    end
+
+    update :finish_conversation do
+      # accept [...]
+      change(transition_state(:end))
+    end
+
+    update :summarize do
+      # accept [...]
+      change(transition_state(:followup))
+    end
+  end
+
+  changes do
+    # any failures should be captured and transitioned to the error state
+    change(
+      after_transaction(fn
+        changeset, {:ok, result} ->
+          {:ok, result}
+
+        changeset, {:error, error} ->
+          message = Exception.message(error)
+
+          changeset.data
+          |> Ash.Changeset.for_update(:error, %{
+            message: message,
+            error_state: changeset.data.state
+          })
+          |> Api.update()
+      end),
+      on: [:update]
+    )
+  end
+
+  code_interface do
+    define_for(ConversationState.Api)
+
+    define(:create)
+    define(:greet)
+    define(:get_table)
+    define(:start_time_filling)
+    define(:fill_symptom_time)
+    define(:finish_conversation)
+    define(:ask_followup_question)
+    define(:proceed_followup)
+    define(:proceed_no_followup)
+    define(:summarize)
+    define(:update)
+  end
+
+  defmodule Api do
+    use Ash.Api,
+      validate_config_inclusion?: false
+
+    resources do
+      allow_unregistered?(true)
+    end
+  end
+end
+```
+
+```elixir
+state = ConversationState.create!()
+```
+
+```elixir
+defmodule ConversationChanges do
+  def make_changeset(text) do
+    ConversationState
+    |> Ash.Changeset.new()
+    |> Ash.Changeset.change_attribute(:text, text)
+  end
+
+  def get_nlu_type(:get_table), do: :raw_table_nlu
+  def get_nlu_type(:normalize_table), do: :table
+
+  def get_nlu_results(nlu_type) do
+  end
+end
+```
+
+```elixir
+start_state = ConversationState.create!()
+
+conversation_state_from_changeset =
+  ConversationState
+  |> Ash.Changeset.for_action()
+  |> Ash.Changeset.change_attribute(:nlu_type, :dummy)
+
+# |> ConversationState.Api.update!()
+# |> ConversationState.create!()
+```
+
+```elixir
+ConversationState.update!(:changeset, changeset)
+```
+
+### Changes
+
+```elixir
+start_state |> ConversationState.greet!()
+```
