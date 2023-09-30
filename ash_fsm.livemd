@@ -6,43 +6,82 @@ Mix.install([
   {:poison, "~> 4.0"},
   {:httpoison, "~> 1.8"},
   {:ash_state_machine, "~> 0.2.1"},
-  {:uuid, "~> 1.1.8"}
+  {:uuid, "~> 1.1.8"},
+  {:ash_paper_trail, "~> 0.1.0", git: "https://github.com/ash-project/ash_paper_trail"}
 ])
 ```
 
-## Section
+## FSM utils
 
 ```elixir
 Ash.Resource.Change.Builtins.set_attribute(:text, "foo")
 ```
 
 ```elixir
-defmodule GreetChange do
+defmodule Responses do
+  def responses do
+    %{
+      greeting: "Hey, wanna talk?",
+      exit: "Ok, bye"
+    }
+  end
+
+  def get_response(responses_map, :saying_scientist_name) do
+    scientists = [
+      "Emmy Noether",
+      "Albert Einstein",
+      "David Hilbert",
+      "Grace Hopper",
+      "Charles Babbage",
+      "Ada Lovelace"
+    ]
+
+    scientists |> Enum.random()
+  end
+
+  def get_response(responses_map, state), do: responses_map[state]
+end
+
+defmodule SetResponseChange do
   use Ash.Resource.Change
+  alias Ash.Changeset
+
+  @responses_map Responses.responses()
 
   def change(changeset, opts, _) do
-    AshStateMachine.transition_state(changeset, opts[:target])
+    state = changeset |> Changeset.get_attribute(:state)
+    response = Responses.get_response(@responses_map, state)
+
+    changeset
+    |> Changeset.force_change_attribute(:response, response)
   end
 end
 ```
 
+## Defining bot FSM
+
 ```elixir
-defmodule ConversationState do
+defmodule BotState do
   # leaving out data layer configuration for brevity
   use Ash.Resource,
-    extensions: [AshStateMachine],
+    extensions: [AshStateMachine, AshPaperTrail.Resource],
+    data_layer: Ash.DataLayer.Ets,
     validate_api_inclusion?: false
 
   attributes do
     uuid_primary_key(:id)
+
+    attribute(:conversation_id, :string) do
+      default(&UUID.uuid1/0)
+    end
+
     # ...attributes like address/delivery options would go here
     attribute(:error, :string)
     attribute(:error_state, :string)
     attribute(:response, :string)
-    attribute(:text, :string)
 
-    attribute :nlu_type, :atom do
-      constraints(one_of: [:dummy])
+    attribute :timestamp, :utc_datetime_usec do
+      default(&DateTime.utc_now/0)
     end
 
     # :state attribute is added for you by `state_machine`
@@ -51,77 +90,52 @@ defmodule ConversationState do
   end
 
   state_machine do
-    initial_states([:start])
-    default_initial_state(:start)
+    initial_states([:greeting])
+    default_initial_state(:greeting)
 
     transitions do
-      transition(:greet, from: :start, to: :table_question)
-      transition(:get_table, from: [:table_question], to: :raw_table_state)
-      transition(:start_time_filling, from: [:raw_table_state, :time_filling], to: :time_filling)
-      transition(:fill_symptom_time, from: :time_filling, to: :time_filling)
-      transition(:return_time_filled_table, from: :time_filling, to: :table_with_time_state)
-      transition(:ask_followup_question, from: :table_with_time_state, to: :followup)
-      transition(:proceed_followup, from: :followup, to: :table_question)
-      transition(:proceed_no_followup, from: :followup, to: :summary)
-      transition(:summarize, from: :summary, to: :end)
-      transition(:finish_conversation, from: :listen, to: :end)
-      # transition(:fallback, from: [:first_question], to: :first_question)
-      # transition(:error, from: [:pending, :confirmed, :on_its_way], to: :error)
+      transition(:listen, from: [:saying_scientist_name, :greeting], to: :listening)
+      transition(:say_scientist_name, from: :listening, to: :saying_scientist_name)
+
+      transition(:finish_conversation,
+        from: [:start, :greeting, :saying_scientist_name],
+        to: :exit
+      )
     end
   end
 
   actions do
     defaults([:create, :read, :update])
 
-    update :greet do
-      change(transition_state(:greeting))
+    update :listen do
+      accept([:conversation_id, :state])
+      change(transition_state(:listening))
+      change(SetResponseChange)
     end
 
-    update :get_table do
-      # setting the NLU type 
-      change(set_attribute(:nlu_type, :trivial))
-      change(transition_state(:listen))
-    end
-
-    update :start_time_filling do
-      # accept [...]
-      change(transition_state(:normalized_table))
-    end
-
-    update :fill_symptom_time do
-      # accept [...]
-      change(transition_state(:setting_time))
-    end
-
-    update :return_time_filled_table do
-      # accept [...]
-      change(transition_state(:setting_time))
-    end
-
-    update :ask_followup_question do
-      # accept [...]
-      change(transition_state(:table_with_time))
-    end
-
-    update :proceed_followup do
-      # accept [...]
-      change(transition_state(:followup))
-    end
-
-    update :proceed_no_followup do
-      # accept [...]
-      change(transition_state(:followup))
+    update :say_scientist_name do
+      accept([:conversation_id, :state])
+      change(transition_state(:saying_scientist_name))
+      change(SetResponseChange)
     end
 
     update :finish_conversation do
-      # accept [...]
-      change(transition_state(:end))
+      accept([:conversation_id, :state])
+      change(transition_state(:exit))
+      change(SetResponseChange)
     end
+  end
 
-    update :summarize do
-      # accept [...]
-      change(transition_state(:followup))
-    end
+  paper_trail do
+    attributes_as_attributes([
+      :id,
+      :state,
+      :conversation_id,
+      :response
+    ])
+
+    change_tracking_mode(:changes_only)
+    store_action_name?(true)
   end
 
   changes do
@@ -146,19 +160,13 @@ defmodule ConversationState do
   end
 
   code_interface do
-    define_for(ConversationState.Api)
+    define_for(BotState.Api)
 
     define(:create)
-    define(:greet)
-    define(:get_table)
-    define(:start_time_filling)
-    define(:fill_symptom_time)
+    define(:listen)
+    define(:say_scientist_name)
     define(:finish_conversation)
-    define(:ask_followup_question)
-    define(:proceed_followup)
-    define(:proceed_no_followup)
-    define(:summarize)
-    define(:update)
+    define(:read)
   end
 
   defmodule Api do
@@ -172,44 +180,195 @@ defmodule ConversationState do
 end
 ```
 
+Ash finite state machines has some goodies for visualizing the FSM
+
+````elixir
+"""
+```mermaid
+#{AshStateMachine.Charts.mermaid_state_diagram(BotState)}
+```
+"""
+|> Kino.Markdown.new()
+````
+
 ```elixir
-state = ConversationState.create!()
+init_state = BotState.create!()
+
+init_state
+|> BotState.listen!()
+|> BotState.say_scientist_name!()
+|> BotState.listen!()
+|> BotState.say_scientist_name!()
+|> BotState.finish_conversation!()
 ```
 
+## Debugging utilities
+
+We're using [ash paper trail](https://github.com/ash-project/ash_paper_trail) to track Ash actions. In our case the most important actions are the transitions.
+
+Using `StateOps.get_history` we can read the state update history.
+
 ```elixir
-defmodule ConversationChanges do
-  def make_changeset(text) do
-    ConversationState
-    |> Ash.Changeset.new()
-    |> Ash.Changeset.change_attribute(:text, text)
+defmodule StateOps do
+  require Ash.Query
+  @state_module BotState
+
+  def get_history(checked_conversation_id) do
+    api_module = @state_module |> Module.concat(Api)
+    version_module = @state_module |> Module.concat(Version)
+
+    version_module
+    |> Ash.Query.filter(conversation_id == ^checked_conversation_id)
+    |> api_module.read!()
   end
 
-  def get_nlu_type(:get_table), do: :raw_table_nlu
-  def get_nlu_type(:normalize_table), do: :table
+  def get_history(checked_conversation_id, by_date: true) do
+    checked_conversation_id
+    |> get_history()
+    |> Enum.sort(fn rec1, rec2 -> rec1.version_inserted_at <= rec2.version_inserted_at end)
+  end
 
-  def get_nlu_results(nlu_type) do
+  defmacro transitions() do
+    %{[:state_machine, :transitions] => %{entities: transitions}} =
+      @state_module.spark_dsl_config()
+
+    transitions |> Macro.escape()
+  end
+
+  defmacro transition_names() do
+    %{[:state_machine, :transitions] => %{entities: transitions}} =
+      @state_module.spark_dsl_config()
+
+    for transition <- transitions do
+      transition.action
+    end
+  end
+
+  defmacro state_transitions_map(state_module) do
+    states_with_transitions =
+      for transition <- transitions() do
+        %_{action: transition_name, from: [state]} = transition
+        {state, Macro.escape(transition)}
+      end
+
+    "transitions map is a compilation-time constant" |> Logger.warning()
+    states_with_transitions
   end
 end
 ```
 
 ```elixir
-start_state = ConversationState.create!()
+init_state.conversation_id |> StateOps.get_history(by_date: true)
+# init_state.conversation_id)
+```
 
-conversation_state_from_changeset =
-  ConversationState
-  |> Ash.Changeset.for_action()
-  |> Ash.Changeset.change_attribute(:nlu_type, :dummy)
+## Visualizing a run of a state machine
 
-# |> ConversationState.Api.update!()
-# |> ConversationState.create!()
+`ash_state_machine` enables us to visualize the FSM schema. The following code can be used to visualize actual *instances* of the FSM - in our use case these are the conversations.
+
+```elixir
+defmodule BotRunDiagram do
+  require Logger
+  require StateOps
+
+  def mermaid_flowchart(checked_conversation_id) do
+    history =
+      checked_conversation_id
+      |> StateOps.get_history(by_date: true)
+      |> Enum.filter(fn version ->
+        version.version_action_name in StateOps.transition_names()
+      end)
+
+    edges = history |> get_history_mermaid_flowchart_edges()
+
+    mermaid_edges =
+      for lines <- edges, line <- lines do
+        "  " <> line
+      end
+
+    [
+      "stateDiagram-v2",
+      mermaid_edges |> Enum.join("\n")
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp get_history_mermaid_flowchart_edges(transition_history) do
+    in_transitions = transition_history |> Enum.drop(-1)
+    out_transitions = transition_history |> Enum.drop(1)
+
+    for {{previous_transition, next_transition}, idx} <-
+          in_transitions |> Enum.zip(out_transitions) |> Enum.with_index() do
+      previous_state = previous_transition |> get_state()
+      previous_state |> get_transition_mermaid_edge(next_transition, idx)
+    end
+  end
+
+  defp get_transition_mermaid_edge(previous_state, version, idx) do
+    %_{version_action_name: transition, changes: changes} = version
+    %{state: next_state} = changes
+
+    [
+      "S#{idx + 1}: #{next_state |> URI.encode()}",
+      "S#{idx} --> S#{idx + 1} : transition&#58 #{transition}"
+    ] ++ maybe_get_description(changes |> stringify_map(), idx)
+  end
+
+  def maybe_get_description("", _) do
+    []
+  end
+
+  def maybe_get_description(transition_description, idx) do
+    transition_description |> IO.puts()
+
+    [
+      "state S#{idx + 1} {\n[*] --> S#{idx + 1}Desc\n}",
+      "S#{idx + 1}Desc: #{transition_description}"
+    ]
+  end
+
+  defp get_state(%_{changes: %{state: state}}) do
+    state
+  end
+
+  defp stringify_map(map) do
+    map
+    |> Enum.map(&stringify_tuple/1)
+    |> Enum.join()
+    |> String.replace("\"", "")
+    |> String.trim()
+  end
+
+  defp stringify_tuple({_, nil}) do
+    ""
+  end
+
+  defp stringify_tuple({:state, v}) do
+    ""
+  end
+
+  defp stringify_tuple({k, v}) do
+    (k |> Atom.to_string()) <> "&#58 " <> (v |> inspect())
+  end
+
+  defp stringify_value(str) when is_bitstring(str) do
+    str
+  end
+
+  defp stringify_value(other), do: ""
+end
 ```
 
 ```elixir
-ConversationState.update!(:changeset, changeset)
+mermaid_flowchart = BotRunDiagram.mermaid_flowchart(init_state.conversation_id)
+mermaid_flowchart |> IO.puts()
 ```
 
-### Changes
-
-```elixir
-start_state |> ConversationState.greet!()
+````elixir
+"""
+```mermaid
+#{mermaid_flowchart}
 ```
+"""
+|> Kino.Markdown.new()
+````
