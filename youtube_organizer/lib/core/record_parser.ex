@@ -7,15 +7,35 @@ defmodule YTOrg.YoutubeRecordParser do
   end
 
   def parse_video(record) do
-    %{"id" => item_id, "snippet" => %{"title" => title, "description" => description}} = record
+    %{
+      "id" => item_id,
+      "snippet" => %{
+        "title" => title,
+        "description" => description,
+        "publishedAt" => published_at_raw,
+        "channelId" => channel_id,
+        "channelTitle" => channel_title
+      }
+    } = record
+
     id = get_video_id(record)
+
+    published_at =
+      case published_at_raw |> DateTime.from_iso8601() do
+        {:ok, dt, _} -> dt
+        {:ok, dt} -> dt
+        {:error, _} -> nil
+      end
 
     yt_vid = %YoutubeVideo{
       id: id,
       title: title,
       description: description,
       playlist_item_id: item_id,
-      url: get_url(id)
+      url: get_url(id),
+      published_at: published_at,
+      channel_id: channel_id,
+      channel_title: channel_title
     }
 
     maybe_add_thumbnails(yt_vid, record["snippet"])
@@ -30,6 +50,10 @@ defmodule YTOrg.YoutubeRecordParser do
 
   defp get_video_id(%{"snippet" => %{"resourceId" => res}}) do
     %{"videoId" => id} = res
+    id
+  end
+
+  defp get_video_id(%{"id" => %{"videoId" => id}}) do
     id
   end
 

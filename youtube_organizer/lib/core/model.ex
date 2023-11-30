@@ -4,7 +4,17 @@ defmodule YTOrg.YoutubePlaylistMetadata do
 end
 
 defmodule YTOrg.YoutubeVideo do
-  defstruct [:id, :title, :url, :description, :thumbnails, :playlist_item_id]
+  defstruct [
+    :id,
+    :title,
+    :url,
+    :description,
+    :thumbnails,
+    :playlist_item_id,
+    :published_at,
+    :channel_id,
+    :channel_title
+  ]
 end
 
 defmodule YTOrg.YoutubePlaylist do

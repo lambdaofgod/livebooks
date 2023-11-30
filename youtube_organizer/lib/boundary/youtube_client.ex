@@ -5,10 +5,12 @@ defmodule YTOrg.YouTubeClient do
   require Poison
   require HTTPoison
 
-  @youtube_api_url "https://www.googleapis.com"
+  @youtube_api_url "https://www.googleapis.com/youtube/v3"
 
   def fetch_playlist_items(auth_wrapper, playlist_id, max_results) do
-    url = "#{@youtube_api_url}/youtube/v3/playlistItems?part=snippet&playlistId=#{playlist_id}&maxResults=#{max_results}"
+    url =
+      "#{@youtube_api_url}/playlistItems?part=snippet&playlistId=#{playlist_id}&maxResults=#{max_results}"
+
     headers = [{"Authorization", "Bearer #{auth_wrapper.token}"}]
     {:ok, %{status_code: 200, body: body}} = HTTPoison.get(url, headers)
 
@@ -57,7 +59,7 @@ defmodule YTOrg.YouTubeClient do
       end
 
     headers = [{"Authorization", "Bearer #{auth_wrapper.token}"}]
-    url = "#{@youtube_api_url}/youtube/v3/playlists?part=snippet&#{url_part}&maxResults=50"
+    url = "#{@youtube_api_url}/playlists?part=snippet&#{url_part}&maxResults=50"
     {:ok, response} = HTTPoison.get(url, headers)
     %{status_code: 200, body: body} = response
     {:ok, body}

@@ -1,0 +1,136 @@
+# YT Viewer
+
+```elixir
+Mix.install([
+  {:kino, "~> 0.9.1"},
+  {:youtube_organizer, path: Path.join([__DIR__, "youtube_organizer"])}
+])
+```
+
+## Section
+
+```elixir
+yt_api_key =
+  "/home/kuba/.keys/yt_api_key.txt"
+  |> File.read!()
+  |> String.trim()
+
+"Loaded api key"
+```
+
+```elixir
+defmodule YTOrg.Channels do
+  require HTTPoison
+
+  def fetch_latest_videos(channel_names, api_key) when is_list(channel_names) do
+    channel_names
+    |> Enum.map(&fetch_latest_videos(&1, api_key))
+    |> Enum.concat()
+    |> Enum.sort_by(& &1.published_at)
+    |> Enum.reverse()
+  end
+
+  def fetch_latest_videos(channel_name, api_key) do
+    channel_name
+    |> fetch_latest_video_data(api_key)
+    |> Enum.map(&YTOrg.YoutubeRecordParser.parse_video/1)
+  end
+
+  def fetch_latest_video_data(channel_name, api_key) do
+    {:ok, channel_id} = fetch_channel_id(channel_name, api_key)
+
+    url =
+      "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=10&order=date&channelId=#{channel_id}&key=#{api_key}"
+
+    with {:ok, response} <- HTTPoison.get(url),
+         {:ok, %{"items" => videos}} <- response |> Map.get(:body) |> Poison.decode() do
+      videos
+    else
+      err -> err
+    end
+  end
+
+  def fetch_channel_id(channel_name, api_key) do
+    url =
+      "https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=#{channel_name}&key=#{api_key}"
+
+    case HTTPoison.get(url) do
+      {:ok, response} ->
+        response
+        |> Map.get(:body)
+        |> Poison.decode()
+        |> case do
+          {:ok, %{"items" => [%{"id" => %{"channelId" => channel_id}} | _]}} ->
+            {:ok, channel_id}
+
+          _ ->
+            {:error, :channel_not_found}
+        end
+
+      {:error, %HTTPoison.Error{} = err} ->
+        IO.inspect(err)
+    end
+  end
+end
+```
+
+```elixir
+defmodule YTOrg.KinoHelpers do
+  def get_link_md(%YTOrg.YoutubeVideo{title: title, url: url}) do
+    "[#{title}](#{url})"
+  end
+
+  def get_link_kino(%YTOrg.YoutubeVideo{} = vid) do
+    vid
+    |> get_link_md()
+    |> Kino.Markdown.new()
+  end
+
+  def get_thumbnail_url(%YTOrg.YoutubeVideo{thumbnails: thumbnails}, size \\ "medium") do
+    thumbnails[size]["url"]
+  end
+
+  def maybe_add_preceding_link_kino(layout, vid = %YTOrg.YoutubeVideo{}) do
+    closest_vid_kino =
+      vid
+      |> get_link_kino()
+
+    Kino.Layout.grid([closest_vid_kino, layout])
+  end
+
+  def maybe_add_preceding_link_kino(layout, nil) do
+    layout
+  end
+end
+```
+
+```elixir
+defmodule YTOrg.YoutubeKino do
+  def get_video_tile(video) do
+    channel = video.channel_title |> Kino.Markdown.new()
+    image = "![](#{video |> YTOrg.KinoHelpers.get_thumbnail_url()})" |> Kino.Markdown.new()
+    title_with_link = video |> YTOrg.KinoHelpers.get_link_md() |> Kino.Markdown.new()
+    Kino.Layout.grid([image, channel, title_with_link], boxed: true)
+  end
+end
+```
+
+```elixir
+urls = ["https://www.youtube.com/@jamesbriggs"]
+```
+
+```elixir
+example_videos = YTOrg.Channels.fetch_latest_videos("samwitteveenai", yt_api_key)
+[example_video | _] = example_videos
+```
+
+```elixir
+example_video |> YTOrg.YoutubeKino.get_video_tile()
+```
+
+```elixir
+YTOrg.Channels.fetch_latest_videos(
+  ["samwitteveenai", "jamesbriggs", "DataIndependent"],
+  yt_api_key
+)
+```
