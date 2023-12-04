@@ -3,6 +3,7 @@
 ```elixir
 Mix.install([
   {:kino, "~> 0.9.1"},
+  {:floki, "~> 0.35.2"},
   {:youtube_organizer, path: Path.join([__DIR__, "youtube_organizer"])}
 ])
 ```
@@ -11,7 +12,8 @@ Mix.install([
 
 ```elixir
 yt_api_key =
-  "/home/kuba/.keys/yt_api_key.txt"
+  "~/.keys/yt_api_key.txt"
+  |> Path.expand()
   |> File.read!()
   |> String.trim()
 
@@ -34,6 +36,18 @@ defmodule YTOrg.Channels do
     channel_name
     |> fetch_latest_video_data(api_key)
     |> Enum.map(&YTOrg.YoutubeRecordParser.parse_video/1)
+  end
+
+  @doc """
+  fetch asynchronously
+  """
+  def afetch_latest_videos(channel_names, api_key) when is_list(channel_names) do
+    channel_names
+    |> Enum.map(fn channel_name -> Task.async(fetch_latest_videos(channel_name, api_key)) end)
+    |> Enum.map(&Task.await/1)
+    |> Enum.concat()
+    |> Enum.sort_by(& &1.published_at)
+    |> Enum.reverse()
   end
 
   def fetch_latest_video_data(channel_name, api_key) do
@@ -105,14 +119,52 @@ end
 ```
 
 ```elixir
-defmodule YTOrg.YoutubeKino do
-  def get_video_tile(video) do
+defmodule YTOrg.YoutubeKinoTiler do
+  defstruct [:format_tile]
+
+  def new() do
+    %YTOrg.YoutubeKinoTiler{format_tile: &make_basic_tile_kino/2}
+  end
+
+  def new(format_tile) do
+    %YTOrg.YoutubeKinoTiler{format_tile: format_tile}
+  end
+
+  def get_video_tile(kt, video) do
     channel = video.channel_title |> Kino.Markdown.new()
     image = "![](#{video |> YTOrg.KinoHelpers.get_thumbnail_url()})" |> Kino.Markdown.new()
     title_with_link = video |> YTOrg.KinoHelpers.get_link_md() |> Kino.Markdown.new()
-    Kino.Layout.grid([image, channel, title_with_link], boxed: true)
+    video |> kt.format_tile.([image, channel, title_with_link])
   end
+
+  def make_basic_tile_kino(_video, inputs) do
+    Kino.Layout.grid(inputs, boxed: true)
+  end
+
+  def make_tile_kino_with_additional_fields(fields) do
+    fn video, inputs ->
+      field_values =
+        for field <- fields do
+          field_value = video |> Map.get(field)
+          convert_field_to_markdown(field_value)
+        end
+
+      all_inputs = inputs ++ field_values
+      Kino.Layout.grid(all_inputs, boxed: true)
+    end
+  end
+
+  def convert_field_to_markdown(%DateTime{} = dt) do
+    dt |> inspect() |> Kino.Markdown.new()
+  end
+
+  def convert_field_to_markdown(v), do: v |> Kino.Markdown.new()
 end
+```
+
+```elixir
+alias YTOrg.YoutubeKinoTiler
+basic_tiler = YoutubeKinoTiler.new()
 ```
 
 ```elixir
@@ -125,12 +177,117 @@ example_videos = YTOrg.Channels.fetch_latest_videos("samwitteveenai", yt_api_key
 ```
 
 ```elixir
-example_video |> YTOrg.YoutubeKino.get_video_tile()
+example_video |> Map.get(:id)
 ```
 
 ```elixir
-YTOrg.Channels.fetch_latest_videos(
-  ["samwitteveenai", "jamesbriggs", "DataIndependent"],
+basic_tiler |> YTOrg.YoutubeKinoTiler.get_video_tile(example_video)
+```
+
+```elixir
+selected_youtubers = ["samwitteveenai", "jamesbriggs", "DataIndependent"]
+```
+
+```elixir
+tiler =
+  YoutubeKinoTiler.new(
+    YoutubeKinoTiler.make_tile_kino_with_additional_fields([:published_at, :description])
+  )
+```
+
+```elixir
+selected_latest_videos =
+  YTOrg.Channels.fetch_latest_videos(
+    selected_youtubers,
+    yt_api_key
+  )
+```
+
+```elixir
+sorted_videos =
+  selected_latest_videos
+  |> Enum.sort(&(DateTime.compare(&1.published_at, &2.published_at) != :lt))
+
+video_tiles =
+  for vid <- sorted_videos do
+    tiler |> YoutubeKinoTiler.get_video_tile(vid)
+  end
+
+video_tiles |> Kino.Layout.grid(columns: 3)
+```
+
+## Parsing subscriptions
+
+It is notoriously hard to get an overview of subbed channels.
+
+We're going to tackle that. First let's extract subs from youtube's left panel that shows subs.
+
+```elixir
+subs_path = __ENV__.file |> Path.dirname() |> Path.join("assets/yt_subs.html")
+{:ok, subs_html} = subs_path |> File.read!() |> Floki.parse_document()
+```
+
+```elixir
+defmodule YTOrg.YoutubeSubsExtractor do
+  def extract_subs(subs_html) do
+    channel_elems =
+      subs_html
+      |> Floki.find(".yt-simple-endpoint")
+
+    channel_elems |> Enum.flat_map(&maybe_get_sub/1)
+  end
+
+  def maybe_get_sub({"a", elems, _}) do
+    with {:ok, sub_data} <- get_title_and_link(elems) do
+      [sub_data]
+    else
+      _ -> []
+    end
+  end
+
+  def get_title_and_link([]), do: {:error, nil}
+  def get_title_and_link([_]), do: {:error, nil}
+
+  def get_title_and_link([{"title", title}, {"href", href}]) do
+    {:ok,
+     %{
+       channel_name: title,
+       channel_link: "https://www.youtube.com#{href}",
+       fetchable_name: href |> String.replace("/@", "")
+     }}
+  end
+
+  def get_title_and_link([_ | rest]), do: get_title_and_link(rest)
+end
+```
+
+```elixir
+alias YTOrg.YoutubeSubsExtractor
+```
+
+```elixir
+sub_data = subs_html |> YoutubeSubsExtractor.extract_subs()
+sub_data |> Enum.count()
+```
+
+Well, no wonder I can't wrap my head around over 300 subs.
+
+```elixir
+sub_data
+```
+
+Benchmark async fetching
+
+WARNING: this code looks like it was called multiple times
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+{time_to_fetch, _} = :timer.tc(fn -> YTOrg.Channels.fetch_latest_videos(
+  selected_youtubers,
   yt_api_key
+) end
 )
+
+time_to_fetch / 1000000
 ```
