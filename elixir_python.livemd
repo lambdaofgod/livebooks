@@ -1,0 +1,107 @@
+# Elixir+Python
+
+```elixir
+Mix.install([
+  {:poison, "~> 3.1"}
+])
+```
+
+## Section
+
+```elixir
+channel_url = "https://www.youtube.com/@DataIndependent"
+```
+
+```elixir
+defmodule YTOrg.Python.ScrapeTube do
+  def get_channel_videos(channel_url) do
+    script_path = __DIR__ |> Path.join("python_scripts")
+    script_result = :os.cmd(:"cd #{script_path}; poetry run python yt.py #{channel_url}")
+    script_result |> Poison.decode()
+  end
+end
+```
+
+```elixir
+alias YTOrg.Python
+```
+
+```elixir
+{:ok, scraped_vids} = Python.ScrapeTube.get_channel_videos(channel_url)
+[vid | _] = scraped_vids
+```
+
+```elixir
+vid |> Map.keys()
+```
+
+```elixir
+vid["title"]
+```
+
+```elixir
+defmodule PythonHelper do
+  defstruct [:python_pid]
+
+  def new(python_path \\ "/usr/bin/python") do
+    {:ok, python_pid} = :python.start()
+    %__MODULE__{python_pid: python_pid}
+  end
+
+  def call(python_helper, module, function, args \\ []) do
+    :python.call(python_helper.python_pid, module, function, args)
+  end
+end
+```
+
+```elixir
+python_helper = PythonHelper.new()
+```
+
+```elixir
+python_helper |> PythonHelper.call(:sys, :eval, ["2 + 2"])
+```
+
+```elixir
+python_code = '2 + 2'
+{:ok, result} = :python.call(python_helper.python_pid, :erlport.erlterms(), :eval, [python_code])
+```
+
+```elixir
+channel_url = "https://www.youtube.com/@DataIndependent"
+```
+
+```elixir
+defmodule MyProject.ElixirPython do
+  def get_channel_videos(channel_url, n_videos \\ 10) do
+    {:ok, python} = :python.start()
+
+    :python.cast(python, {:add_path, 'python_scripts'})
+    :python.cast(python, {:yt, 'import yt'})
+
+    {:ok, result} = :python.call(python, :yt, :get_videos, [channel_url, n_videos])
+    result
+  end
+end
+```
+
+```elixir
+MyProject.ElixirPython.get_channel_videos(channel_url)
+```
+
+```elixir
+defmodule MyApp.Python do
+  @python_script """
+  def add(a, b):
+     return a + b
+  """
+
+  def add(a, b) do
+    {:ok, python} = :python.start([{:python_path, '/path/to/your/python'}])
+    {:ok, python_script} = :python.call(python, :optimize, :optimize, [@python_script])
+    result = :python.call(python, 'add', [a, b])
+    :python.stop(python)
+    result
+  end
+end
+```

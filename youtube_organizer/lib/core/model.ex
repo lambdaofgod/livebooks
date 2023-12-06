@@ -13,7 +13,8 @@ defmodule YTOrg.YoutubeVideo do
     :playlist_item_id,
     :published_at,
     :channel_id,
-    :channel_title
+    :channel_title,
+    :channel_url
   ]
 end
 

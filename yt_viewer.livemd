@@ -4,11 +4,19 @@
 Mix.install([
   {:kino, "~> 0.9.1"},
   {:floki, "~> 0.35.2"},
+  {:crawly, "~> 0.8"},
+  {:export, "~> 0.1.0"},
+  {:timex, "~> 3.7.11"},
+  {:progress_bar, "~> 3.0.0"},
   {:youtube_organizer, path: Path.join([__DIR__, "youtube_organizer"])}
 ])
 ```
 
-## Section
+## Getting video data from youtube
+
+```elixir
+require Logger
+```
 
 ```elixir
 yt_api_key =
@@ -21,71 +29,144 @@ yt_api_key =
 ```
 
 ```elixir
+defmodule YTOrg.Channels.ScrapeTube do
+  @moduledoc """
+  scrape youtube videos for a given channel
+  """
+  def get_channel_videos(channel_url) do
+    with {:ok, videos} <- get_scrapetube_channel_videos(channel_url) do
+      {:ok, videos |> Enum.map(fn vid -> vid |> parse_scraped_video(channel_url) end)}
+    else
+      e -> e
+    end
+  end
+
+  def get_scrapetube_channel_videos(channel_url) do
+    script_path = __DIR__ |> Path.join("python_scripts")
+
+    try do
+      :os.cmd(:"cd #{script_path}; poetry run python yt.py #{channel_url}")
+      |> Poison.decode()
+    rescue
+      _ -> {:error, nil}
+    end
+  end
+
+  defp parse_scraped_video(
+         %{"videoId" => id} = vid,
+         channel_url
+       ) do
+    %YTOrg.YoutubeVideo{
+      id: id,
+      url: "https://www.youtube.com/watch?v=#{id}",
+      title: get_title(vid),
+      thumbnails: get_thumbnails(vid),
+      description: get_description(vid),
+      channel_url: channel_url,
+      channel_title: get_channel_title(channel_url),
+      published_at: get_published_date(vid)
+    }
+  end
+
+  defp get_published_date(%{"dateText" => %{"simpleText" => dt}}) do
+    with {:ok, ndate} <- dt |> Timex.parse("%b %e, %Y", :strftime),
+         {:ok, date} <- ndate |> DateTime.from_naive("Etc/UTC") do
+      date
+    else
+      _ -> nil
+    end
+  end
+
+  defp get_channel_title(channel_url) do
+    channel_url |> String.split("@") |> List.last()
+  end
+
+  defp get_title(%{"title" => %{"runs" => [%{"text" => title} | _]}}) do
+    title
+  end
+
+  defp get_thumbnails(%{"thumbnail" => %{"thumbnails" => thumbnails}}) do
+    thumbnails
+  end
+
+  defp get_description(%{"descriptionSnippet" => %{"runs" => [%{"text" => description} | _]}}) do
+    description
+  end
+
+  defp get_description(_), do: nil
+end
+```
+
+```elixir
 defmodule YTOrg.Channels do
   require HTTPoison
+  alias YTOrg.Channels.ScrapeTube
 
-  def fetch_latest_videos(channel_names, api_key) when is_list(channel_names) do
-    channel_names
-    |> Enum.map(&fetch_latest_videos(&1, api_key))
-    |> Enum.concat()
+  def fetch_latest_videos(channel_name, _) when is_bitstring(channel_name) do
+    {:ok, videos} = try_fetch_latest_videos(channel_name)
+    videos
+  end
+
+  def fetch_latest_videos(channel_names, opts \\ nil) when is_list(channel_names) do
+    channel_results =
+      channel_names
+      |> fetch_per_channel_latest_videos(opts)
+
+    log_failed_results(channel_results)
+
+    channel_results
+    |> Enum.flat_map(fn {_, videos} -> videos end)
     |> Enum.sort_by(& &1.published_at)
     |> Enum.reverse()
   end
 
-  def fetch_latest_videos(channel_name, api_key) do
-    channel_name
-    |> fetch_latest_video_data(api_key)
-    |> Enum.map(&YTOrg.YoutubeRecordParser.parse_video/1)
+  defp log_failed_results(channel_results) do
+    n_failed_channels =
+      channel_results
+      |> Enum.filter(fn {_, videos} -> videos == [] end)
+      |> Enum.count()
+
+    if n_failed_channels > 0 do
+      Logger.warn("scraping failed for #{n_failed_channels} channels")
+    end
   end
 
-  @doc """
-  fetch asynchronously
-  """
-  def afetch_latest_videos(channel_names, api_key) when is_list(channel_names) do
+  def try_fetch_latest_videos(channel_name) do
+    results = channel_name |> channel_name_to_channel_url() |> ScrapeTube.get_channel_videos()
+
+    case results do
+      {:ok, videos} ->
+        {channel_name, videos}
+
+      _ ->
+        Logger.warn("failed fetching videos for #{channel_name}")
+        {channel_name, []}
+    end
+  end
+
+  defp fetch_per_channel_latest_videos(channel_names, async_timeout: timeout) do
     channel_names
-    |> Enum.map(fn channel_name -> Task.async(fetch_latest_videos(channel_name, api_key)) end)
-    |> Enum.map(&Task.await/1)
-    |> Enum.concat()
-    |> Enum.sort_by(& &1.published_at)
-    |> Enum.reverse()
+    |> Enum.map(fn channel_name -> Task.async(fn -> try_fetch_latest_videos(channel_name) end) end)
+    |> Task.await_many(timeout)
   end
 
-  def fetch_latest_video_data(channel_name, api_key) do
-    {:ok, channel_id} = fetch_channel_id(channel_name, api_key)
+  defp fetch_per_channel_latest_videos(channel_names, _) do
+    n_names = channel_names |> Enum.count()
 
-    url =
-      "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=10&order=date&channelId=#{channel_id}&key=#{api_key}"
-
-    with {:ok, response} <- HTTPoison.get(url),
-         {:ok, %{"items" => videos}} <- response |> Map.get(:body) |> Poison.decode() do
-      videos
-    else
-      err -> err
+    for {channel_name, i} <- Enum.with_index(channel_names) do
+      ProgressBar.render(i, n_names)
+      try_fetch_latest_videos(channel_name)
     end
   end
 
-  def fetch_channel_id(channel_name, api_key) do
-    url =
-      "https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=#{channel_name}&key=#{api_key}"
-
-    case HTTPoison.get(url) do
-      {:ok, response} ->
-        response
-        |> Map.get(:body)
-        |> Poison.decode()
-        |> case do
-          {:ok, %{"items" => [%{"id" => %{"channelId" => channel_id}} | _]}} ->
-            {:ok, channel_id}
-
-          _ ->
-            {:error, :channel_not_found}
-        end
-
-      {:error, %HTTPoison.Error{} = err} ->
-        IO.inspect(err)
-    end
+  defp channel_name_to_channel_url(channel_name) do
+    "https://www.youtube.com/@#{channel_name}"
   end
 end
+```
+
+```elixir
+YTOrg.Channels.try_fetch_latest_videos("samwitteveenai")
 ```
 
 ```elixir
@@ -100,7 +181,18 @@ defmodule YTOrg.KinoHelpers do
     |> Kino.Markdown.new()
   end
 
-  def get_thumbnail_url(%YTOrg.YoutubeVideo{thumbnails: thumbnails}, size \\ "medium") do
+  def get_thumbnail_url(vid) do
+    get_thumbnail_url(vid, "medium")
+  end
+
+  def get_thumbnail_url(%YTOrg.YoutubeVideo{thumbnails: thumbnails}, size)
+      when is_list(thumbnails) do
+    thumbnails_sorted = thumbnails |> Enum.sort_by(fn tn -> tn["width"] end)
+    thumbnails_by_size = ["small", "medium", "large"] |> Enum.zip(thumbnails_sorted) |> Map.new()
+    thumbnails_by_size[size]["url"]
+  end
+
+  def get_thumbnail_url(%YTOrg.YoutubeVideo{thumbnails: thumbnails}, size) do
     thumbnails[size]["url"]
   end
 
@@ -131,7 +223,7 @@ defmodule YTOrg.YoutubeKinoTiler do
   end
 
   def get_video_tile(kt, video) do
-    channel = video.channel_title |> Kino.Markdown.new()
+    channel = "[#{video.channel_title}](#{video.channel_url})" |> Kino.Markdown.new()
     image = "![](#{video |> YTOrg.KinoHelpers.get_thumbnail_url()})" |> Kino.Markdown.new()
     title_with_link = video |> YTOrg.KinoHelpers.get_link_md() |> Kino.Markdown.new()
     video |> kt.format_tile.([image, channel, title_with_link])
@@ -155,9 +247,10 @@ defmodule YTOrg.YoutubeKinoTiler do
   end
 
   def convert_field_to_markdown(%DateTime{} = dt) do
-    dt |> inspect() |> Kino.Markdown.new()
+    dt |> Calendar.strftime("%Y/%m/%d") |> Kino.Markdown.new()
   end
 
+  def convert_field_to_markdown(nil), do: Kino.Markdown.new("")
   def convert_field_to_markdown(v), do: v |> Kino.Markdown.new()
 end
 ```
@@ -168,16 +261,15 @@ basic_tiler = YoutubeKinoTiler.new()
 ```
 
 ```elixir
-urls = ["https://www.youtube.com/@jamesbriggs"]
+urls = ["https://www.youtube.com/@DataIndependent"]
 ```
 
 ```elixir
-example_videos = YTOrg.Channels.fetch_latest_videos("samwitteveenai", yt_api_key)
-[example_video | _] = example_videos
+{:ok, example_videos} = YTOrg.Channels.ScrapeTube.get_channel_videos(urls |> List.first())
 ```
 
 ```elixir
-example_video |> Map.get(:id)
+example_video = example_videos |> List.first()
 ```
 
 ```elixir
@@ -196,11 +288,8 @@ tiler =
 ```
 
 ```elixir
-selected_latest_videos =
-  YTOrg.Channels.fetch_latest_videos(
-    selected_youtubers,
-    yt_api_key
-  )
+selected_latest_videos = YTOrg.Channels.fetch_latest_videos(selected_youtubers)
+:ok
 ```
 
 ```elixir
@@ -212,6 +301,8 @@ video_tiles =
   for vid <- sorted_videos do
     tiler |> YoutubeKinoTiler.get_video_tile(vid)
   end
+
+# video_tiles = selected_latest_videos |> Enum.map(fn vid -> basic_tiler |> YoutubeKinoTiler.get_video_tile(vid) end)
 
 video_tiles |> Kino.Layout.grid(columns: 3)
 ```
@@ -225,6 +316,7 @@ We're going to tackle that. First let's extract subs from youtube's left panel t
 ```elixir
 subs_path = __ENV__.file |> Path.dirname() |> Path.join("assets/yt_subs.html")
 {:ok, subs_html} = subs_path |> File.read!() |> Floki.parse_document()
+:ok
 ```
 
 ```elixir
@@ -251,9 +343,9 @@ defmodule YTOrg.YoutubeSubsExtractor do
   def get_title_and_link([{"title", title}, {"href", href}]) do
     {:ok,
      %{
-       channel_name: title,
-       channel_link: "https://www.youtube.com#{href}",
-       fetchable_name: href |> String.replace("/@", "")
+       full_title: title,
+       channel_url: "https://www.youtube.com#{href}",
+       title: href |> String.replace("/@", "")
      }}
   end
 
@@ -273,21 +365,58 @@ sub_data |> Enum.count()
 Well, no wonder I can't wrap my head around over 300 subs.
 
 ```elixir
-sub_data
+subbed_channels =
+  for sub <- sub_data do
+    sub.title
+  end
 ```
 
-Benchmark async fetching
-
-WARNING: this code looks like it was called multiple times
-
-<!-- livebook:{"force_markdown":true} -->
+```elixir
+__DIR__
+|> Path.join("assets/subbed_channels.json")
+|> File.write!(subbed_channels |> Poison.encode!())
+```
 
 ```elixir
-{time_to_fetch, _} = :timer.tc(fn -> YTOrg.Channels.fetch_latest_videos(
-  selected_youtubers,
-  yt_api_key
-) end
-)
+{time, _} =
+  :timer.tc(fn ->
+    YTOrg.Channels.fetch_latest_videos(subbed_channels |> Enum.take(2))
+  end)
 
-time_to_fetch / 1000000
+time / 1_000_000
+```
+
+```elixir
+"http://youtube.com/@/channel/UCVhEmzWMkRhVRKvFVvf-YoA"
+|> YTOrg.Channels.ScrapeTube.get_channel_videos()
+```
+
+```elixir
+Kernel.div(300, 16)
+```
+
+```elixir
+n = subbed_channels |> Enum.count()
+
+{time, subbed_videos} =
+  :timer.tc(fn ->
+    YTOrg.Channels.fetch_latest_videos(
+      subbed_channels |> Enum.take(n),
+      async_timeout: 4 * 1_000_000
+    )
+  end)
+
+time / 1_000_000
+```
+
+```elixir
+3 * 30
+```
+
+```elixir
+300_000 * 300 / 10 / 1_000_000
+```
+
+```elixir
+subbed_videos |> Enum.count()
 ```
