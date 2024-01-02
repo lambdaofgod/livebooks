@@ -8,6 +8,8 @@ Mix.install([
   {:export, "~> 0.1.0"},
   {:timex, "~> 3.7.11"},
   {:progress_bar, "~> 3.0.0"},
+  {:rustler, "~> 0.27.0"},
+  {:uuid, "~> 1.1"},
   {:youtube_organizer, path: Path.join([__DIR__, "youtube_organizer"])}
 ])
 ```
@@ -41,11 +43,20 @@ defmodule YTOrg.Channels.ScrapeTube do
     end
   end
 
-  def get_scrapetube_channel_videos(channel_url) do
+  def get_scrapetube_channel_videos(channel_url, opts \\ [scrape_date: true]) do
+    scrape_date = opts |> Keyword.get(:scrape_date)
+
     script_path = __DIR__ |> Path.join("python_scripts")
 
+    date_arg =
+      if scrape_date do
+        "get_date"
+      else
+        ""
+      end
+
     try do
-      :os.cmd(:"cd #{script_path}; poetry run python yt.py #{channel_url}")
+      :os.cmd(:"cd #{script_path}; poetry run python yt.py #{channel_url} #{date_arg}")
       |> Poison.decode()
     rescue
       _ -> {:error, nil}
@@ -103,7 +114,7 @@ defmodule YTOrg.Channels do
   alias YTOrg.Channels.ScrapeTube
 
   def fetch_latest_videos(channel_name, _) when is_bitstring(channel_name) do
-    {:ok, videos} = try_fetch_latest_videos(channel_name)
+    {_, videos} = try_fetch_latest_videos(channel_name)
     videos
   end
 
@@ -265,11 +276,7 @@ urls = ["https://www.youtube.com/@DataIndependent"]
 ```
 
 ```elixir
-{:ok, example_videos} = YTOrg.Channels.ScrapeTube.get_channel_videos(urls |> List.first())
-```
-
-```elixir
-example_video = example_videos |> List.first()
+[example_video | _] = YTOrg.Channels.fetch_latest_videos("samwitteveenai")
 ```
 
 ```elixir
@@ -293,8 +300,56 @@ selected_latest_videos = YTOrg.Channels.fetch_latest_videos(selected_youtubers)
 ```
 
 ```elixir
+[vid | _] = selected_latest_videos
+```
+
+## Creator wordclouds
+
+```elixir
+defmodule YTOrg.AggregateVideos do
+  def aggregate_texts(videos, group_by \\ :channel_title) do
+    grouped_videos = videos |> group_videos(group_by)
+
+    for {gp_name, vids} <- grouped_videos, into: %{} do
+      vid_texts =
+        vids |> Enum.map(fn %_{title: title, description: desc} -> title <> " " <> desc end)
+
+      text = vid_texts |> Enum.join(" ")
+      {gp_name, text |> String.downcase()}
+    end
+  end
+
+  def group_videos(videos, group_by) do
+    videos |> Enum.group_by(fn vid -> vid |> Map.get(group_by) end)
+  end
+end
+```
+
+```elixir
+video_texts_by_creators = selected_latest_videos |> YTOrg.AggregateVideos.aggregate_texts()
+```
+
+```elixir
+creators_wordclouds =
+  for {creator, text} <- video_texts_by_creators, into: %{} do
+    {creator, YTOrg.WordCloud.get_wordcloud_image(text)}
+  end
+
+:ok
+```
+
+```elixir
+creators_wordclouds["jamesbriggs"]
+```
+
+```elixir
+creators_wordclouds["DataIndependent"]
+```
+
+```elixir
 sorted_videos =
   selected_latest_videos
+  |> Enum.filter(&(&1.published_at != nil))
   |> Enum.sort(&(DateTime.compare(&1.published_at, &2.published_at) != :lt))
 
 video_tiles =
@@ -302,9 +357,27 @@ video_tiles =
     tiler |> YoutubeKinoTiler.get_video_tile(vid)
   end
 
-# video_tiles = selected_latest_videos |> Enum.map(fn vid -> basic_tiler |> YoutubeKinoTiler.get_video_tile(vid) end)
+:ok
 
-video_tiles |> Kino.Layout.grid(columns: 3)
+# video_tiles = selected_latest_videos |> Enum.map(fn vid -> basic_tiler |> YoutubeKinoTiler.get_video_tile(vid) end)
+```
+
+```elixir
+page_size = 18
+
+n_pages =
+  video_tiles
+  |> Enum.count()
+  |> Kernel.div(page_size)
+  |> Kernel.ceil()
+```
+
+```elixir
+page_select = Kino.Input.select("Page", for(p <- 1..page_size, do: {p, p |> Integer.to_string()}))
+```
+
+```elixir
+video_tiles |> Enum.take(18) |> Kino.Layout.grid(columns: 3)
 ```
 
 ## Parsing subscriptions
@@ -410,7 +483,7 @@ time / 1_000_000
 ```
 
 ```elixir
-3 * 30
+subbed_videos |> Enum.count()
 ```
 
 ```elixir

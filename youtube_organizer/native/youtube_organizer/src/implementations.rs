@@ -18,10 +18,14 @@ fn tokenize(text: String) -> Vec<(Token, f32)> {
         .map(|(k, v)| (Token::Text(k), v as f32))
         .collect()
 }
-pub fn save_wordcloud_impl(input_file_path: String, output_path: String) {
+
+pub fn save_wordcloud_from_file_impl(input_file_path: String, output_path: String) {
     let text = fs::read_to_string(input_file_path).unwrap();
+    save_wordcloud_impl(text, output_path);
+}
+
+pub fn save_wordcloud_impl(text: String, output_path: String) {
     let mut tokens = tokenize(text);
-    // tokens.push((Token::Text("💻".to_string()), 20.));
     // Generate the word-cloud
     let wc = WordCloud::new().generate(tokens);
     // Save it

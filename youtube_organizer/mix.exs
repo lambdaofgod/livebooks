@@ -21,6 +21,7 @@ defmodule YTOrg.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:uuid, "~> 1.1"},
       {:export, "~> 0.1.0"},
       {:poison, "~> 3.1"},
       {:httpoison, "~> 1.8"},
